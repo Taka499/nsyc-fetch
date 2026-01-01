@@ -1,0 +1,21 @@
+[project]
+name = "nsyc-fetch"
+version = "0.1.0"
+description = "Never Skip Your Content - Event fetcher for artists"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx",
+    "beautifulsoup4",
+    "lxml",
+    "openai",
+    "pydantic",
+    "python-dotenv",
+    "pyyaml",
+]
+
+[project.scripts]
+nsyc-fetch = "nsyc_fetch.main:main"
+
+[build-system]
+requires = ["uv_build"]
+build-backend = "uv_build"
