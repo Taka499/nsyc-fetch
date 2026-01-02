@@ -21,7 +21,7 @@ To verify success, run `uv run nsyc-fetch --force` and observe:
 
 ## Progress
 
-- [ ] Milestone 1: Implement per-page extraction as default
+- [x] Milestone 1: Implement per-page extraction as default
 - [ ] Milestone 2: Track detail page URLs in state
 - [ ] Milestone 3: Detect and handle updates to known detail pages
 - [ ] Milestone 4: Add ended flag and event update logic
@@ -29,7 +29,7 @@ To verify success, run `uv run nsyc-fetch --force` and observe:
 
 ## Surprises & Discoveries
 
-(To be filled during implementation)
+- Milestone 1 (2026-01-02): Per-page extraction significantly increases the number of events extracted. The previous batch approach was likely losing some events to context dilution. With per-page extraction, we now get more accurate lottery information for each event.
 
 
 ## Decision Log

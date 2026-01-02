@@ -138,15 +138,27 @@ class RunLogger:
         prompt: str,
         model: str,
         artist_name: str,
+        page_index: int | None = None,
     ) -> None:
-        """Log the prompt sent to LLM."""
+        """Log the prompt sent to LLM.
+
+        Args:
+            source_id: Source identifier
+            prompt: The prompt sent to the LLM
+            model: Model name used
+            artist_name: Artist being processed
+            page_index: Optional page index for per-page extraction logging.
+                        If provided, creates llm_request_{index}.json instead of llm_request.json
+        """
         source_dir = self._source_dir(source_id)
+        filename = f"llm_request_{page_index}.json" if page_index is not None else "llm_request.json"
         self._write_json(
-            source_dir / "llm_request.json",
+            source_dir / filename,
             {
                 "source_id": source_id,
                 "artist_name": artist_name,
                 "model": model,
+                "page_index": page_index,
                 "timestamp": datetime.now().isoformat(),
                 "prompt_length": len(prompt),
                 "caller": self._get_caller_info(),
@@ -161,13 +173,26 @@ class RunLogger:
         tokens_used: dict[str, int] | None = None,
         success: bool = True,
         error: str | None = None,
+        page_index: int | None = None,
     ) -> None:
-        """Log the raw LLM response."""
+        """Log the raw LLM response.
+
+        Args:
+            source_id: Source identifier
+            response: The raw response from the LLM
+            tokens_used: Token usage statistics
+            success: Whether the call succeeded
+            error: Error message if failed
+            page_index: Optional page index for per-page extraction logging.
+                        If provided, creates llm_response_{index}.json instead of llm_response.json
+        """
         source_dir = self._source_dir(source_id)
+        filename = f"llm_response_{page_index}.json" if page_index is not None else "llm_response.json"
         self._write_json(
-            source_dir / "llm_response.json",
+            source_dir / filename,
             {
                 "source_id": source_id,
+                "page_index": page_index,
                 "timestamp": datetime.now().isoformat(),
                 "success": success,
                 "error": error,
@@ -184,13 +209,23 @@ class RunLogger:
         self,
         source_id: str,
         events: list[dict[str, Any]],
+        page_index: int | None = None,
     ) -> None:
-        """Log extracted events."""
+        """Log extracted events.
+
+        Args:
+            source_id: Source identifier
+            events: List of extracted events as dicts
+            page_index: Optional page index for per-page extraction logging.
+                        If provided, creates extracted_events_{index}.json
+        """
         source_dir = self._source_dir(source_id)
+        filename = f"extracted_events_{page_index}.json" if page_index is not None else "extracted_events.json"
         self._write_json(
-            source_dir / "extracted_events.json",
+            source_dir / filename,
             {
                 "source_id": source_id,
+                "page_index": page_index,
                 "timestamp": datetime.now().isoformat(),
                 "num_events": len(events),
                 "caller": self._get_caller_info(),

@@ -292,6 +292,10 @@ def extract_events_from_sections(
     """Extract events from multiple content sections.
 
     Combines sections and extracts events in one call to save API costs.
+
+    DEPRECATED: Use extract_events_from_section() for per-page extraction instead.
+    This function is kept for backwards compatibility but per-page extraction
+    is now the default to avoid context dilution.
     """
     if not sections:
         return []
@@ -306,3 +310,163 @@ def extract_events_from_sections(
         client=client,
         source_id=source_id,
     )
+
+
+def extract_events_from_section(
+    section: str,
+    artist_name: str,
+    source_url: str,
+    client: OpenAI,
+    source_id: str,
+    page_index: int = 0,
+) -> list[Event] | None:
+    """Extract events from a single section (detail page).
+
+    This is the preferred extraction method. Each detail page is processed
+    independently to avoid context dilution where lottery info from one
+    event gets lost among content from other events.
+
+    Args:
+        section: Content from a single detail page
+        artist_name: Name of the artist
+        source_url: URL of the detail page
+        client: OpenAI client
+        source_id: Source identifier for logging
+        page_index: Index of this page (for logging filenames)
+
+    Returns:
+        List of events extracted, empty list if none found, None if extraction failed.
+    """
+    logger = get_logger()
+
+    # Extract the actual URL from the section header if present
+    detail_url = source_url
+    if section.startswith("=== Detail Page:"):
+        # Parse URL from "=== Detail Page: https://... ==="
+        first_line = section.split("\n")[0]
+        url_match = first_line.replace("=== Detail Page:", "").replace("===", "").strip()
+        if url_match:
+            detail_url = url_match
+
+    # Truncate content if too long
+    max_content_length = 12000
+    content = section
+    if len(content) > max_content_length:
+        content = content[:max_content_length] + "\n...[truncated]"
+
+    prompt = EXTRACTION_PROMPT.format(
+        source_url=detail_url,
+        artist_name=artist_name,
+        content=content,
+    )
+
+    model = "gpt-4o-mini"
+
+    # Log LLM request with page index
+    if logger:
+        logger.log_llm_request(
+            source_id=source_id,
+            prompt=prompt,
+            model=model,
+            artist_name=artist_name,
+            page_index=page_index,
+        )
+
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You extract event information from Japanese entertainment content. Respond only with valid JSON.",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
+            max_tokens=2000,
+        )
+
+        result_text = response.choices[0].message.content.strip()
+
+        # Extract token usage
+        tokens_used = None
+        if response.usage:
+            tokens_used = {
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "total_tokens": response.usage.total_tokens,
+            }
+
+        # Log LLM response with page index
+        if logger:
+            logger.log_llm_response(
+                source_id=source_id,
+                response=result_text,
+                tokens_used=tokens_used,
+                success=True,
+                page_index=page_index,
+            )
+
+        # Try to parse JSON (handle potential markdown wrapping)
+        if result_text.startswith("```"):
+            lines = result_text.split("\n")
+            result_text = "\n".join(
+                line for line in lines if not line.startswith("```")
+            )
+
+        result = json.loads(result_text)
+
+        # Convert to Event objects
+        events = []
+        for e in result.get("events", []):
+            try:
+                raw_type = e.get("event_type", "other")
+                try:
+                    event_type = EventType(raw_type)
+                except ValueError:
+                    event_type = EventType.OTHER
+
+                event = Event(
+                    artist=artist_name,
+                    event_type=event_type,
+                    title=e.get("title", "Unknown Event"),
+                    date=_parse_date(e.get("date")),
+                    end_date=_parse_date(e.get("end_date")),
+                    venue=e.get("venue"),
+                    location=e.get("location"),
+                    action_required=e.get("action_required", False),
+                    action_deadline=_parse_date(e.get("action_deadline")),
+                    action_description=e.get("action_description"),
+                    event_url=e.get("event_url"),
+                    ticket_url=e.get("ticket_url"),
+                    source_url=detail_url,
+                )
+                events.append(event)
+            except Exception as parse_err:
+                print(f"Warning: Failed to parse event: {parse_err}")
+                continue
+
+        return events
+
+    except json.JSONDecodeError as e:
+        print(f"Error parsing LLM response as JSON: {e}")
+        if logger:
+            logger.log_llm_response(
+                source_id=source_id,
+                response=result_text if "result_text" in locals() else "",
+                success=False,
+                error=f"JSON decode error: {e}",
+                page_index=page_index,
+            )
+        return None
+    except Exception as e:
+        print(f"Error during extraction: {e}")
+        if logger:
+            logger.log_llm_response(
+                source_id=source_id,
+                response="",
+                success=False,
+                error=str(e),
+                page_index=page_index,
+            )
+        return None

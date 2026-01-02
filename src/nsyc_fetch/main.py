@@ -10,7 +10,7 @@ import yaml
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from .extractor import extract_events_from_sections
+from .extractor import extract_events_from_section
 from .fetcher import fetch_source
 from .logger import close_logger, get_logger, init_logger
 from .models import Event, FetchState
@@ -140,39 +140,70 @@ async def fetch_artist_events(
             print(f"  Content changed (hash: {content.content_hash[:8]})")
             print(f"  Found {len(content.relevant_sections)} relevant sections")
 
-            # Extract events (do NOT update hash yet)
-            if content.relevant_sections:
-                events = extract_events_from_sections(
-                    sections=content.relevant_sections,
-                    artist_name=artist_name,
-                    source_url=url,
-                    client=openai_client,
-                    source_id=source_id,
-                )
+            # Extract events using per-page extraction
+            # Each detail page is processed independently to avoid context dilution
+            detail_sections = [
+                s for s in content.relevant_sections if s.startswith("=== Detail Page:")
+            ]
 
-                if events is None:
-                    # Extraction failed - don't update hash, retry next run
-                    print("  Extraction failed - will retry next run")
-                    if logger:
-                        logger.log_error(source_id, "Extraction returned None")
-                    continue
+            if detail_sections:
+                source_events = []
+                extraction_failed = False
+                page_index = 0
 
-                print(f"  Extracted {len(events)} events")
-                all_events.extend(events)
+                for section in detail_sections:
+                    # Extract URL from section header for logging
+                    first_line = section.split("\n")[0]
+                    detail_url = first_line.replace("=== Detail Page:", "").replace("===", "").strip()
+                    print(f"    Extracting from page {page_index}: {detail_url[:60]}...")
 
-                # Log extracted events
-                if logger:
-                    logger.log_events(
+                    events = extract_events_from_section(
+                        section=section,
+                        artist_name=artist_name,
+                        source_url=url,
+                        client=openai_client,
                         source_id=source_id,
-                        events=[e.model_dump(mode="json") for e in events],
+                        page_index=page_index,
                     )
 
-                # Only update hash after successful extraction
+                    if events is None:
+                        # Extraction failed for this page
+                        print(f"    Extraction failed for page {page_index}")
+                        extraction_failed = True
+                    elif events:
+                        print(f"    Found {len(events)} events")
+                        source_events.extend(events)
+
+                        # Log extracted events for this page
+                        if logger:
+                            logger.log_events(
+                                source_id=source_id,
+                                events=[e.model_dump(mode="json") for e in events],
+                                page_index=page_index,
+                            )
+                    else:
+                        print("    No events found")
+
+                    page_index += 1
+
+                if extraction_failed:
+                    # At least one extraction failed - don't update hash, retry next run
+                    print("  Some extractions failed - will retry next run")
+                    if logger:
+                        logger.log_error(source_id, "Some page extractions failed")
+                    # Still add successfully extracted events
+                    all_events.extend(source_events)
+                    continue
+
+                print(f"  Extracted {len(source_events)} total events from {len(detail_sections)} pages")
+                all_events.extend(source_events)
+
+                # Only update hash after all extractions succeed
                 state.source_hashes[source_id] = content.content_hash
             else:
-                print("  No relevant sections found")
+                print("  No detail page sections found")
                 if logger:
-                    logger.log_skip(source_id, "No relevant sections")
+                    logger.log_skip(source_id, "No detail page sections")
                 # Still update hash if no sections (nothing to extract)
                 state.source_hashes[source_id] = content.content_hash
 
