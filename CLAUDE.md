@@ -35,32 +35,48 @@ src/nsyc_fetch/
 ├── main.py       # CLI entry point, orchestrates fetch→extract→save pipeline
 ├── fetcher.py    # HTTP requests (httpx), HTML parsing (BeautifulSoup), link extraction
 ├── extractor.py  # LLM prompt engineering, JSON parsing, Event creation
+├── logger.py     # Structured logging for debugging LLM interactions
 └── models.py     # Pydantic schemas: Event, EventType, SourceContent, FetchState
 ```
 
 **Key data flow:**
 
-1. `main.py:fetch_artist_events()` iterates over sources from `sources.yaml`
+1. `main.py:run_fetch()` loads `sources.yaml` and iterates over artists/sources
 2. `fetcher.py:fetch_source()` does two-pass fetching: listing page → detail pages
-3. Content hash compared against `state.json` to skip unchanged sources
-4. `extractor.py:extract_events_from_sections()` sends content to GPT-4o-mini
+3. Each detail page is extracted independently via `extractor.py` (per-page extraction)
+4. Content hashes compared against `state.json` to skip unchanged pages
 5. Events deduplicated by signature `(artist|title|date)` and saved to `events.json`
 6. State hash updated only after successful extraction (retry-on-failure pattern)
+7. Logs saved to `logs/{timestamp}/{source_id}/` for debugging
 
 **Key files (user-managed):**
-- `sources.yaml` — source configuration (artists, URLs, filter keywords)
-- `state.json` — content hashes for change detection (auto-managed)
+- `sources.yaml` — source configuration (what to monitor: artists, URLs, filter keywords)
+- `state.json` — content hashes and known detail pages (auto-managed)
 - `events.json` — extracted events output (auto-generated)
+- `logs/` — debug logs with LLM requests/responses (auto-generated)
 
 ## Key Implementation Details
 
 **Two-pass fetching** (`fetcher.py`): Listing pages only show summaries. Detail pages have lottery dates and ticket URLs. The fetcher extracts links matching `/events/` or `/news/` patterns and fetches each detail page.
 
-**Change detection** (`fetcher.py:compute_content_hash()`): SHA-256 hash of combined content. Hash only updated after successful LLM extraction, so failures retry on next run.
+**Per-page extraction**: Each detail page is sent to the LLM independently. This prevents context dilution where lottery info from one event gets lost among content from other events.
 
-**LLM extraction prompt** (`extractor.py:EXTRACTION_PROMPT`): Engineered for Japanese entertainment events. Recognizes 先行抽選 (lottery), 先行発売/一般発売 (ticket sales), ライブ/LIVE/公演 (concerts), CD/アルバム releases.
+**Change detection** (`fetcher.py:compute_content_hash()`): SHA-256 hash of content. Hash only updated after successful LLM extraction, so failures retry on next run.
+
+**LLM extraction prompt** (`extractor.py:EXTRACTION_PROMPT`): Engineered for Japanese entertainment events. Recognizes:
+- CD先行/シリアル先行 (CD lottery with serial code prerequisite)
+- 先行抽選 (lottery), 先行発売/一般発売 (ticket sales)
+- ライブ/LIVE/公演 (concerts), CD/アルバム releases
 
 **Event types** (`models.py:EventType`): live, release, lottery, sale, broadcast, streaming, screening, other
+
+**Structured logging** (`logger.py`): Each run creates `logs/{timestamp}/` with per-source subdirectories containing `fetched_content.json`, `llm_request.json`, `llm_response.json`, and `extracted_events.json`.
+
+## Design Principles
+
+**sources.yaml is about "what to monitor", not "how to process"**: Keep user configuration minimal. Processing decisions (per-page extraction, update detection) are handled automatically by the system, not configured per-source.
+
+**Event lifecycle**: Detail pages change over time (lottery ends → new sale opens). The system monitors known detail pages for updates until the event date passes.
 
 ## Environment
 

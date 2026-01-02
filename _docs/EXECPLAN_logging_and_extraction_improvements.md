@@ -33,7 +33,11 @@ To verify success, run `uv run nsyc-fetch --force` and check that MyGO!!!!! 9th 
     - Ave Mujica TOUR: "Apply for lottery using serial code from Ave Mujica 3rd Single (first-press)"
     - ツーマンライブ: "Apply for tickets through playguide (2 tickets per person)"
   - All 5 live events now have action_required=false (lottery info on separate events)
-- [ ] Milestone 3: Implement per-event extraction option
+- [x] (2026-01-02) Milestone 3: Moved to new ExecPlan
+  - During design discussion, scope expanded significantly
+  - Per-page extraction should be default behavior, not optional mode
+  - Additionally need to track updates to existing detail pages (event lifecycle)
+  - See: `_docs/EXECPLAN_per_page_extraction_and_lifecycle.md`
 
 
 ## Surprises & Discoveries
@@ -69,7 +73,26 @@ To verify success, run `uv run nsyc-fetch --force` and check that MyGO!!!!! 9th 
 
 ## Outcomes & Retrospective
 
-(To be filled after implementation)
+**Completed: 2026-01-02**
+
+This ExecPlan achieved its primary goals for Milestones 1 and 2:
+
+1. **Logging Infrastructure (Milestone 1)**: Developers can now inspect exactly what content was sent to the LLM and what response came back. Logs are saved to `logs/{timestamp}/{source_id}/` with structured JSON files for fetched content, LLM request/response, and extracted events. This proved invaluable for debugging the CD先行 extraction issue.
+
+2. **CD先行 Pattern Recognition (Milestone 2)**: The LLM now correctly identifies and describes CD先行 lottery patterns. Before this work, MyGO 9th LIVE was extracted as "Purchase tickets". After, it correctly shows "Apply using serial code from 8th Single (first-press)" with a separate lottery event.
+
+**Milestone 3 was moved to a new ExecPlan** due to scope expansion during design discussion:
+
+- Original plan: Add optional `extraction_mode: per_page` field to `sources.yaml`
+- Revised understanding: Per-page extraction should be the default (not optional), because batch extraction sacrifices accuracy
+- Additional insight: Detail pages change over time (lottery periods end, new sales open), requiring lifecycle monitoring
+- New scope includes: per-page extraction as default, detail page hash tracking, event updates, ended flag
+
+**Lessons learned:**
+
+- The root cause analysis approach (logging first, then prompt improvement) was correct. Without logs, we would have continued guessing about whether the issue was fetcher-level or prompt-level.
+- Design discussions before implementation can reveal scope changes early. The "what to monitor vs how to process" distinction clarified that `extraction_mode` didn't belong in `sources.yaml`.
+- Event extraction is not a one-time operation. Real-world events evolve (lotteries end, new sales open), requiring continuous monitoring of known detail pages.
 
 
 ## Context and Orientation

@@ -27,3 +27,4 @@ Thumbs.db
 
 # Project-specific (keep these in repo but ignore local changes if needed)
 # state.json  # Uncomment if you don't want to track state
+logs/

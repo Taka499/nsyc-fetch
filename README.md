@@ -67,7 +67,7 @@ uv run nsyc-fetch --config my-sources.yaml --output my-events.json
 
 ### sources.yaml
 
-Define artists and their official sources:
+Define artists and their official sources. Keep it simple — just specify what to monitor:
 
 ```yaml
 artists:
@@ -76,11 +76,15 @@ artists:
       - MyGO
     sources:
       - id: bangdream-events-mygo
-        type: webpage
         url: https://bang-dream.com/events
         filter_keywords:
           - MyGO
 ```
+
+The system automatically:
+- Fetches the listing page and discovers detail page links
+- Extracts each detail page independently for accuracy
+- Monitors known pages for updates (lottery ended → new sale opened)
 
 ### Output: events.json
 
@@ -89,21 +93,23 @@ artists:
   {
     "artist": "MyGO!!!!!",
     "event_type": "lottery",
-    "title": "MyGO!!!!! 9th LIVE チケット先行抽選",
-    "date": "2025-02-01",
-    "end_date": "2025-02-07",
+    "title": "MyGO!!!!! 9th LIVE 最速先行抽選",
+    "date": "2025-12-06",
+    "end_date": "2026-02-02",
     "action_required": true,
-    "action_deadline": "2025-02-07",
-    "action_description": "Apply for ticket lottery",
-    "ticket_url": "https://eplus.jp/..."
+    "action_deadline": "2026-02-02T23:59:00",
+    "action_description": "Apply using serial code from 8th Single (first-press)",
+    "event_url": "https://bang-dream.com/events/mygo_9th"
   },
   {
     "artist": "MyGO!!!!!",
     "event_type": "live",
     "title": "MyGO!!!!! 9th LIVE",
-    "date": "2025-04-15",
-    "venue": "Tokyo Dome",
-    "location": "Tokyo"
+    "date": "2026-07-18",
+    "end_date": "2026-07-19",
+    "venue": "ぴあアリーナMM",
+    "location": "Yokohama",
+    "action_required": false
   }
 ]
 ```
@@ -128,11 +134,12 @@ artists:
 
 ## Files
 
-| File           | Purpose                                 |
-| -------------- | --------------------------------------- |
-| `sources.yaml` | Source configuration                    |
-| `state.json`   | Tracks what we've seen (content hashes) |
-| `events.json`  | Extracted events (the output)           |
+| File/Directory | Purpose                                         |
+| -------------- | ----------------------------------------------- |
+| `sources.yaml` | Source configuration (what to monitor)          |
+| `state.json`   | Tracks content hashes and known detail pages    |
+| `events.json`  | Extracted events (the output)                   |
+| `logs/`        | Debug logs with LLM requests/responses per run  |
 
 ## Extending
 
@@ -145,12 +152,12 @@ artists:
   - name: Your Artist
     sources:
       - id: artist-official
-        type: webpage
         url: https://example.com/news
         filter_keywords:
           - keyword1
-          - keyword2
 ```
+
+Run `uv run nsyc-fetch --force` to fetch immediately.
 
 ### Export to Google Calendar
 
