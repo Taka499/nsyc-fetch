@@ -12,6 +12,7 @@ from openai import OpenAI
 
 from .extractor import extract_events_from_sections
 from .fetcher import fetch_source
+from .logger import close_logger, get_logger, init_logger
 from .models import Event, FetchState
 
 
@@ -86,6 +87,7 @@ async def fetch_artist_events(
     artist_name = artist_config["name"]
     sources = artist_config.get("sources", [])
     all_events = []
+    logger = get_logger()
 
     print(f"\n{'=' * 50}")
     print(f"Processing: {artist_name}")
@@ -95,12 +97,12 @@ async def fetch_artist_events(
         source_id = source["id"]
         url = source["url"]
         filter_keywords = source.get("filter_keywords", [])
-        fetch_detail_pages = source.get("fetch_detail_pages", True)  # Default: enabled
+        fetch_detail = source.get("fetch_detail_pages", True)
         max_detail_pages = source.get("max_detail_pages", 10)
 
         print(f"\nFetching: {source_id}")
         print(f"  URL: {url}")
-        print(f"  Detail pages: {'enabled' if fetch_detail_pages else 'disabled'}")
+        print(f"  Detail pages: {'enabled' if fetch_detail else 'disabled'}")
 
         try:
             # Fetch content
@@ -108,14 +110,31 @@ async def fetch_artist_events(
                 source_id=source_id,
                 url=url,
                 filter_keywords=filter_keywords,
-                fetch_detail_pages=fetch_detail_pages,
+                fetch_detail_pages=fetch_detail,
                 max_detail_pages=max_detail_pages,
             )
+
+            # Log fetched content
+            combined = "\n---\n".join(content.relevant_sections)
+            detail_count = sum(
+                1 for s in content.relevant_sections if s.startswith("=== Detail Page:")
+            )
+            if logger:
+                logger.log_fetch(
+                    source_id=source_id,
+                    url=url,
+                    sections=content.relevant_sections,
+                    combined_content=combined,
+                    content_hash=content.content_hash,
+                    detail_pages_fetched=detail_count,
+                )
 
             # Check if content changed
             old_hash = state.source_hashes.get(source_id)
             if old_hash == content.content_hash:
                 print(f"  No changes detected (hash: {content.content_hash[:8]})")
+                if logger:
+                    logger.log_skip(source_id, "Content unchanged")
                 continue
 
             print(f"  Content changed (hash: {content.content_hash[:8]})")
@@ -128,25 +147,39 @@ async def fetch_artist_events(
                     artist_name=artist_name,
                     source_url=url,
                     client=openai_client,
+                    source_id=source_id,
                 )
 
                 if events is None:
                     # Extraction failed - don't update hash, retry next run
                     print("  Extraction failed - will retry next run")
+                    if logger:
+                        logger.log_error(source_id, "Extraction returned None")
                     continue
 
                 print(f"  Extracted {len(events)} events")
                 all_events.extend(events)
 
+                # Log extracted events
+                if logger:
+                    logger.log_events(
+                        source_id=source_id,
+                        events=[e.model_dump(mode="json") for e in events],
+                    )
+
                 # Only update hash after successful extraction
                 state.source_hashes[source_id] = content.content_hash
             else:
                 print("  No relevant sections found")
+                if logger:
+                    logger.log_skip(source_id, "No relevant sections")
                 # Still update hash if no sections (nothing to extract)
                 state.source_hashes[source_id] = content.content_hash
 
         except Exception as e:
             print(f"  Error: {e}")
+            if logger:
+                logger.log_error(source_id, str(e))
             continue
 
     return all_events
@@ -162,6 +195,10 @@ async def run_fetch(
     # Load environment
     load_dotenv()
 
+    # Initialize logger
+    logger = init_logger()
+    print(f"Logs will be saved to: {logger.run_dir}")
+
     # Create OpenAI client
     openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -175,21 +212,26 @@ async def run_fetch(
     # Fetch events for each artist
     all_events: list[Event] = []
 
-    for artist_config in config.get("artists", []):
-        events = await fetch_artist_events(
-            artist_config=artist_config,
-            openai_client=openai_client,
-            state=state,
-        )
-        all_events.extend(events)
+    try:
+        for artist_config in config.get("artists", []):
+            events = await fetch_artist_events(
+                artist_config=artist_config,
+                openai_client=openai_client,
+                state=state,
+            )
+            all_events.extend(events)
 
-    # Update state
-    state.last_run = datetime.now()
+        # Update state
+        state.last_run = datetime.now()
 
-    # Save results
-    if all_events:
-        save_events(all_events, events_path)
-    save_state(state, state_path)
+        # Save results
+        if all_events:
+            save_events(all_events, events_path)
+        save_state(state, state_path)
+
+    finally:
+        # Always close logger and write summary
+        close_logger()
 
     print(f"\n{'=' * 50}")
     print(f"Fetch complete. Found {len(all_events)} new events.")

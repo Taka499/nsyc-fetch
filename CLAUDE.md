@@ -2,20 +2,73 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-# ExecPlans
+## ExecPlans
 
-When writing complex features or significant refactors, use an ExecPlan (as described in _docs/PLANS.md) from design to implementation.
+When writing complex features or significant refactors, use an ExecPlan (as described in `_docs/PLANS.md`) from design to implementation.
 
 ## Project Overview
 
-to be updated
+NSYC-Fetch ("Never Skip Your Content") monitors official artist websites and extracts time-bound events (concerts, ticket lotteries, sales deadlines) into structured JSON. It solves the problem of missing ticket lottery deadlines by proactively monitoring sources and extracting actionable deadlines.
 
-## COMMIT DISCIPLINE
-- Follow Git-flow workflow to manage the branches
+**Core flow:** `sources.yaml` → Webpage scraping → LLM extraction (GPT-4o-mini) → `events.json`
+
+## Commands
+
+```bash
+# Install dependencies
+uv sync
+
+# Run the fetcher
+uv run nsyc-fetch
+
+# Force re-fetch (ignore content hashes)
+uv run nsyc-fetch --force
+
+# Custom paths
+uv run nsyc-fetch --config my-sources.yaml --output my-events.json
+```
+
+## Architecture
+
+```
+src/nsyc_fetch/
+├── main.py       # CLI entry point, orchestrates fetch→extract→save pipeline
+├── fetcher.py    # HTTP requests (httpx), HTML parsing (BeautifulSoup), link extraction
+├── extractor.py  # LLM prompt engineering, JSON parsing, Event creation
+└── models.py     # Pydantic schemas: Event, EventType, SourceContent, FetchState
+```
+
+**Key data flow:**
+
+1. `main.py:fetch_artist_events()` iterates over sources from `sources.yaml`
+2. `fetcher.py:fetch_source()` does two-pass fetching: listing page → detail pages
+3. Content hash compared against `state.json` to skip unchanged sources
+4. `extractor.py:extract_events_from_sections()` sends content to GPT-4o-mini
+5. Events deduplicated by signature `(artist|title|date)` and saved to `events.json`
+6. State hash updated only after successful extraction (retry-on-failure pattern)
+
+**Key files (user-managed):**
+- `sources.yaml` — source configuration (artists, URLs, filter keywords)
+- `state.json` — content hashes for change detection (auto-managed)
+- `events.json` — extracted events output (auto-generated)
+
+## Key Implementation Details
+
+**Two-pass fetching** (`fetcher.py`): Listing pages only show summaries. Detail pages have lottery dates and ticket URLs. The fetcher extracts links matching `/events/` or `/news/` patterns and fetches each detail page.
+
+**Change detection** (`fetcher.py:compute_content_hash()`): SHA-256 hash of combined content. Hash only updated after successful LLM extraction, so failures retry on next run.
+
+**LLM extraction prompt** (`extractor.py:EXTRACTION_PROMPT`): Engineered for Japanese entertainment events. Recognizes 先行抽選 (lottery), 先行発売/一般発売 (ticket sales), ライブ/LIVE/公演 (concerts), CD/アルバム releases.
+
+**Event types** (`models.py:EventType`): live, release, lottery, sale, broadcast, streaming, screening, other
+
+## Environment
+
+Requires `OPENAI_API_KEY` environment variable. Use `.env` file (copy from `.env.example`).
+
+## Commit Discipline
+
+- Follow Git-flow workflow to manage branches
 - Use small, frequent commits rather than large, infrequent ones
-- Only add and commit affected files. Keep untracked other files as are
-- Never add Claude Code attribution in commit
-
-## Setup and Development
-
-to be updated
+- Only add and commit affected files; keep untracked files as they are
+- Never add Claude Code attribution in commits
