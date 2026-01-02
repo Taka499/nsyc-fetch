@@ -13,7 +13,7 @@ from openai import OpenAI
 from .extractor import extract_events_from_section
 from .fetcher import fetch_source
 from .logger import close_logger, get_logger, init_logger
-from .models import Event, FetchState
+from .models import DetailPageState, Event, FetchState
 
 
 def load_sources(config_path: str = "sources.yaml") -> dict:
@@ -154,8 +154,14 @@ async def fetch_artist_events(
                 for section in detail_sections:
                     # Extract URL from section header for logging
                     first_line = section.split("\n")[0]
-                    detail_url = first_line.replace("=== Detail Page:", "").replace("===", "").strip()
-                    print(f"    Extracting from page {page_index}: {detail_url[:60]}...")
+                    detail_url = (
+                        first_line.replace("=== Detail Page:", "")
+                        .replace("===", "")
+                        .strip()
+                    )
+                    print(
+                        f"    Extracting from page {page_index}: {detail_url[:60]}..."
+                    )
 
                     events = extract_events_from_section(
                         section=section,
@@ -170,19 +176,38 @@ async def fetch_artist_events(
                         # Extraction failed for this page
                         print(f"    Extraction failed for page {page_index}")
                         extraction_failed = True
-                    elif events:
-                        print(f"    Found {len(events)} events")
-                        source_events.extend(events)
-
-                        # Log extracted events for this page
-                        if logger:
-                            logger.log_events(
-                                source_id=source_id,
-                                events=[e.model_dump(mode="json") for e in events],
-                                page_index=page_index,
-                            )
                     else:
-                        print("    No events found")
+                        # Extraction succeeded (may have 0 or more events)
+                        if events:
+                            print(f"    Found {len(events)} events")
+                            source_events.extend(events)
+
+                            # Log extracted events for this page
+                            if logger:
+                                logger.log_events(
+                                    source_id=source_id,
+                                    events=[e.model_dump(mode="json") for e in events],
+                                    page_index=page_index,
+                                )
+                        else:
+                            print("    No events found")
+
+                        # Record detail page state for tracking updates
+                        # Find max event date to know when to stop monitoring this page
+                        max_event_date = None
+                        if events:
+                            event_dates = [e.date for e in events if e.date]
+                            if event_dates:
+                                max_event_date = max(event_dates)
+
+                        page_hash = content.detail_page_hashes.get(detail_url, "")
+                        state.detail_pages[detail_url] = DetailPageState(
+                            url=detail_url,
+                            content_hash=page_hash,
+                            last_checked=datetime.now(),
+                            event_date=max_event_date,
+                            source_id=source_id,
+                        )
 
                     page_index += 1
 
@@ -195,7 +220,9 @@ async def fetch_artist_events(
                     all_events.extend(source_events)
                     continue
 
-                print(f"  Extracted {len(source_events)} total events from {len(detail_sections)} pages")
+                print(
+                    f"  Extracted {len(source_events)} total events from {len(detail_sections)} pages"
+                )
                 all_events.extend(source_events)
 
                 # Only update hash after all extractions succeed

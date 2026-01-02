@@ -151,7 +151,11 @@ class RunLogger:
                         If provided, creates llm_request_{index}.json instead of llm_request.json
         """
         source_dir = self._source_dir(source_id)
-        filename = f"llm_request_{page_index}.json" if page_index is not None else "llm_request.json"
+        filename = (
+            f"llm_request_{page_index}.json"
+            if page_index is not None
+            else "llm_request.json"
+        )
         self._write_json(
             source_dir / filename,
             {
@@ -187,7 +191,11 @@ class RunLogger:
                         If provided, creates llm_response_{index}.json instead of llm_response.json
         """
         source_dir = self._source_dir(source_id)
-        filename = f"llm_response_{page_index}.json" if page_index is not None else "llm_response.json"
+        filename = (
+            f"llm_response_{page_index}.json"
+            if page_index is not None
+            else "llm_response.json"
+        )
         self._write_json(
             source_dir / filename,
             {
@@ -220,7 +228,11 @@ class RunLogger:
                         If provided, creates extracted_events_{index}.json
         """
         source_dir = self._source_dir(source_id)
-        filename = f"extracted_events_{page_index}.json" if page_index is not None else "extracted_events.json"
+        filename = (
+            f"extracted_events_{page_index}.json"
+            if page_index is not None
+            else "extracted_events.json"
+        )
         self._write_json(
             source_dir / filename,
             {

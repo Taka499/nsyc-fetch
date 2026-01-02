@@ -344,7 +344,9 @@ def extract_events_from_section(
     if section.startswith("=== Detail Page:"):
         # Parse URL from "=== Detail Page: https://... ==="
         first_line = section.split("\n")[0]
-        url_match = first_line.replace("=== Detail Page:", "").replace("===", "").strip()
+        url_match = (
+            first_line.replace("=== Detail Page:", "").replace("===", "").strip()
+        )
         if url_match:
             detail_url = url_match
 

@@ -22,7 +22,7 @@ To verify success, run `uv run nsyc-fetch --force` and observe:
 ## Progress
 
 - [x] Milestone 1: Implement per-page extraction as default
-- [ ] Milestone 2: Track detail page URLs in state
+- [x] Milestone 2: Track detail page URLs in state
 - [ ] Milestone 3: Detect and handle updates to known detail pages
 - [ ] Milestone 4: Add ended flag and event update logic
 
@@ -30,6 +30,8 @@ To verify success, run `uv run nsyc-fetch --force` and observe:
 ## Surprises & Discoveries
 
 - Milestone 1 (2026-01-02): Per-page extraction significantly increases the number of events extracted. The previous batch approach was likely losing some events to context dilution. With per-page extraction, we now get more accurate lottery information for each event.
+
+- Milestone 2 (2026-01-02): Added `source_id` field to `DetailPageState` beyond what was originally planned. This allows filtering known pages by source during Milestone 3 implementation. Also added `detail_page_hashes` to `SourceContent` to pass per-page hashes from fetcher to main.py cleanly.
 
 
 ## Decision Log

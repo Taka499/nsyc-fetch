@@ -192,6 +192,7 @@ async def fetch_source(
 
     # Fetch detail pages if enabled
     detail_contents = []
+    detail_page_hashes: dict[str, str] = {}
     if fetch_detail_pages:
         event_links = extract_event_links(html, url, filter_keywords)
         print(f"    Found {len(event_links)} detail page links")
@@ -202,6 +203,8 @@ async def fetch_source(
                 detail_html = await fetch_webpage(link)
                 detail_text = extract_detail_page_content(detail_html)
                 detail_contents.append(f"=== Detail Page: {link} ===\n{detail_text}")
+                # Store per-page hash for state tracking
+                detail_page_hashes[link] = compute_content_hash(detail_text)
             except Exception as e:
                 print(f"    Failed to fetch {link}: {e}")
                 continue
@@ -221,4 +224,5 @@ async def fetch_source(
         raw_html=html,
         extracted_text=text,
         relevant_sections=all_sections,
+        detail_page_hashes=detail_page_hashes,
     )
