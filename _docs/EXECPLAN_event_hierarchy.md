@@ -17,11 +17,11 @@ To verify the change works: run `uv run nsyc-fetch --force`, then inspect `event
 
 ## Progress
 
-- [x] (2026-01-02) Milestone 1: Update Event model with new fields (event_id, parent_event_id added)
-- [ ] Milestone 2: Update extraction prompt to generate event IDs and parent references
-- [ ] Milestone 3: Update event parsing to handle new fields
-- [ ] Milestone 4: Update save_events() to use event_id for deduplication
-- [ ] Milestone 5: Add query utilities
+- [x] (2026-01-03) Milestone 1: Update Event model with new fields (event_id, parent_event_id added)
+- [x] (2026-01-03) Milestone 2: Update extraction prompt with EVENT ID FORMAT and PARENT-CHILD RELATIONSHIPS sections
+- [x] (2026-01-03) Milestone 3: Update event parsing in extract_events() and extract_events_from_section()
+- [x] (2026-01-03) Milestone 4: Update save_events() to use event_id for deduplication (removed signature-based matching)
+- [x] (2026-01-03) Milestone 5: Add get_ticket_phases() and get_next_action() query utilities
 - [ ] Milestone 6: End-to-end validation
 
 

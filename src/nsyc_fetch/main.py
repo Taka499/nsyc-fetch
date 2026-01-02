@@ -47,11 +47,6 @@ def load_events(events_path: str = "events.json") -> list[dict]:
     return []
 
 
-def event_signature(e: dict) -> str:
-    """Create a stable signature for matching events across runs."""
-    return f"{e['artist']}|{e['title']}|{e['date']}"
-
-
 def mark_ended_events(events: list[dict], current_time: datetime) -> int:
     """Mark events as ended if their date has passed.
 
@@ -76,17 +71,18 @@ def mark_ended_events(events: list[dict], current_time: datetime) -> int:
 def save_events(events: list[Event], events_path: str = "events.json") -> None:
     """Save events to JSON file, merging with existing events.
 
-    Uses upsert logic: updates existing events by signature, adds new ones.
+    Uses upsert logic: updates existing events by event_id, adds new ones.
     Preserves historical metadata (extracted_at) from existing events.
     """
     existing = load_events(events_path)
     now = datetime.now()
 
-    # Build a map of existing events by signature
-    existing_by_sig: dict[str, dict] = {}
+    # Build a map of existing events by event_id
+    existing_by_id: dict[str, dict] = {}
     for e in existing:
-        sig = event_signature(e)
-        existing_by_sig[sig] = e
+        event_id = e.get("event_id")
+        if event_id:
+            existing_by_id[event_id] = e
 
     # Convert new events to dicts
     new_event_dicts = [e.model_dump(mode="json") for e in events]
@@ -95,22 +91,28 @@ def save_events(events: list[Event], events_path: str = "events.json") -> None:
     added = 0
     updated = 0
     for event_dict in new_event_dicts:
-        sig = event_signature(event_dict)
-        if sig in existing_by_sig:
+        event_id = event_dict.get("event_id")
+        if event_id and event_id in existing_by_id:
             # Update existing event, preserving extracted_at
-            old_event = existing_by_sig[sig]
+            old_event = existing_by_id[event_id]
             old_extracted_at = old_event.get("extracted_at")
             old_event.update(event_dict)
             if old_extracted_at:
                 old_event["extracted_at"] = old_extracted_at
             updated += 1
+        elif event_id:
+            # Add new event with event_id
+            existing_by_id[event_id] = event_dict
+            added += 1
         else:
-            # Add new event
-            existing_by_sig[sig] = event_dict
+            # Event without event_id (shouldn't happen, but handle gracefully)
+            # Generate a temporary key to avoid losing the event
+            temp_key = f"_no_id_{len(existing_by_id)}"
+            existing_by_id[temp_key] = event_dict
             added += 1
 
     # Rebuild list from map
-    all_events = list(existing_by_sig.values())
+    all_events = list(existing_by_id.values())
 
     # Mark ended events (date has passed)
     ended_count = mark_ended_events(all_events, now)
@@ -130,6 +132,58 @@ def save_events(events: list[Event], events_path: str = "events.json") -> None:
         status_parts.append(f"marked {ended_count} ended")
     status = ", ".join(status_parts) if status_parts else "no changes"
     print(f"Events: {status}. Total: {len(all_events)}")
+
+
+def get_ticket_phases(concert_id: str, events: list[dict]) -> list[dict]:
+    """Get all ticket phases (lottery/sale) for a concert, sorted by date.
+
+    Args:
+        concert_id: The event_id of the parent concert
+        events: List of event dicts to search
+
+    Returns:
+        List of ticket phase events sorted by date
+    """
+    phases = [e for e in events if e.get("parent_event_id") == concert_id]
+    return sorted(phases, key=lambda e: e.get("date", "9999-12-31"))
+
+
+def get_next_action(
+    concert_id: str,
+    events: list[dict],
+    now: datetime | None = None,
+) -> dict | None:
+    """Get the next active ticket phase for a concert.
+
+    Returns the lottery/sale event with the earliest upcoming deadline
+    that hasn't ended yet.
+
+    Args:
+        concert_id: The event_id of the parent concert
+        events: List of event dicts to search
+        now: Current time (defaults to datetime.now())
+
+    Returns:
+        The next actionable ticket phase, or None if none available
+    """
+    if now is None:
+        now = datetime.now()
+
+    now_str = now.strftime("%Y-%m-%dT%H:%M:%S")
+
+    phases = [
+        e
+        for e in events
+        if e.get("parent_event_id") == concert_id
+        and not e.get("ended")
+        and e.get("action_deadline")
+        and e.get("action_deadline") > now_str
+    ]
+
+    if not phases:
+        return None
+
+    return min(phases, key=lambda e: e["action_deadline"])
 
 
 def get_known_urls_for_source(

@@ -13,19 +13,61 @@ EXTRACTION_PROMPT = """You are an event extraction assistant for Japanese entert
 Given the following content from {source_url}, extract any time-bound events related to the artist "{artist_name}".
 
 For each event found, extract:
-1. event_type: One of: live, release, lottery, sale, broadcast, streaming, screening, other
-2. title: Event title (in original language)
-3. date: Event date (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)
-4. end_date: End date if it's a multi-day event or period (optional)
-5. venue: Venue name (optional, for live events)
-6. location: City/area (optional)
-7. action_required: true if user needs to take action (buy tickets, apply for lottery, etc.)
-8. action_deadline: Deadline for action if applicable (ISO format)
-9. action_description: What action is needed - BE SPECIFIC about prerequisites
-10. event_url: URL for event details (optional)
-11. ticket_url: URL for ticket purchase (optional)
+1. event_id: A stable identifier (see EVENT ID FORMAT below)
+2. parent_event_id: For lottery/sale events, the parent concert's event_id (see PARENT-CHILD RELATIONSHIPS below)
+3. event_type: One of: live, release, lottery, sale, broadcast, streaming, screening, other
+4. title: Event title (in original language)
+5. date: Event date (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)
+6. end_date: End date if it's a multi-day event or period (optional)
+7. venue: Venue name (optional, for live events)
+8. location: City/area (optional)
+9. action_required: true if user needs to take action (buy tickets, apply for lottery, etc.)
+10. action_deadline: Deadline for action if applicable (ISO format)
+11. action_description: What action is needed - BE SPECIFIC about prerequisites
+12. event_url: URL for event details (optional)
+13. ticket_url: URL for ticket purchase (optional)
 
-IMPORTANT - Ticket Lottery Patterns (先行抽選):
+## EVENT ID FORMAT
+
+Generate event_id as: lowercase-title-words-YYYY-MM-DD
+
+Examples:
+- "MyGO!!!!! 9th LIVE" on 2026-07-18 → "mygo-9th-live-2026-07-18"
+- "Ave Mujica LIVE TOUR 2026「Exitus」" starting 2026-04-17 → "ave-mujica-live-tour-2026-exitus-2026-04-17"
+
+Rules:
+- Use the EVENT date (concert date for live events, start date for lotteries)
+- Remove special characters (!!!!, ×, ♪, etc.)
+- Replace spaces and Japanese brackets「」with hyphens
+- All lowercase
+- For lottery/sale events, append the phase type suffix (see below)
+
+Lottery/sale event_id suffixes:
+- `-lottery-cd` for CD先行/シリアル先行 (CD/serial code lottery)
+- `-lottery-fc` for FC先行 (fan club lottery)
+- `-lottery-fastest` for 最速先行 (fastest priority)
+- `-lottery-playguide` for プレイガイド先行 (playguide lottery)
+- `-sale-general` for 一般発売 (general sale)
+
+## PARENT-CHILD RELATIONSHIPS
+
+Ticket phases (lottery, sale) are CHILDREN of their parent concert. Link them using parent_event_id.
+
+CRITICAL: For lottery/sale events, parent_event_id MUST reference the parent concert's event_id.
+
+Example - A concert "Artist 9th LIVE" on 2026-07-18 with a CD lottery:
+
+Concert (parent):
+- event_id: "artist-9th-live-2026-07-18"
+- parent_event_id: null
+- event_type: "live"
+
+CD Lottery (child):
+- event_id: "artist-9th-live-2026-07-18-lottery-cd"
+- parent_event_id: "artist-9th-live-2026-07-18"
+- event_type: "lottery"
+
+## TICKET LOTTERY PATTERNS (先行抽選)
 
 Japanese events often have multiple lottery/sale phases. Create SEPARATE events for each phase:
 
@@ -52,8 +94,9 @@ Japanese events often have multiple lottery/sale phases. Create SEPARATE events 
    Extract as event_type: "lottery"
 
 CRITICAL: For each concert/live, you MUST create SEPARATE events:
-- One "live" event for the actual concert (action_required: false)
-- One "lottery" event for EACH ticket lottery/sale phase with:
+- One "live" event for the actual concert (action_required: false, parent_event_id: null)
+- One "lottery" or "sale" event for EACH ticket phase with:
+  - parent_event_id = the concert's event_id
   - date/end_date = the APPLICATION PERIOD (not the concert date)
   - action_deadline = when applications close
   - action_description = specific requirements (CD name, lottery type, etc.)
@@ -75,19 +118,8 @@ Content to analyze:
 Respond ONLY with a JSON object in this exact format (no markdown, no explanation):
 {{"events": [
   {{
-    "event_type": "lottery",
-    "title": "Artist Name 9th LIVE 最速先行抽選",
-    "date": "2025-12-06",
-    "end_date": "2026-02-02",
-    "venue": null,
-    "location": null,
-    "action_required": true,
-    "action_deadline": "2026-02-02T23:59:00",
-    "action_description": "Apply using serial code from 8th Single (first-press)",
-    "event_url": "https://...",
-    "ticket_url": "https://..."
-  }},
-  {{
+    "event_id": "artist-9th-live-2026-07-18",
+    "parent_event_id": null,
     "event_type": "live",
     "title": "Artist Name 9th LIVE",
     "date": "2026-07-18",
@@ -99,6 +131,21 @@ Respond ONLY with a JSON object in this exact format (no markdown, no explanatio
     "action_description": null,
     "event_url": "https://...",
     "ticket_url": null
+  }},
+  {{
+    "event_id": "artist-9th-live-2026-07-18-lottery-cd",
+    "parent_event_id": "artist-9th-live-2026-07-18",
+    "event_type": "lottery",
+    "title": "Artist Name 9th LIVE CD先行抽選",
+    "date": "2025-12-06",
+    "end_date": "2026-02-02",
+    "venue": null,
+    "location": null,
+    "action_required": true,
+    "action_deadline": "2026-02-02T23:59:00",
+    "action_description": "Apply using serial code from 8th Single (first-press)",
+    "event_url": "https://...",
+    "ticket_url": "https://..."
   }}
 ]}}
 
@@ -217,6 +264,8 @@ def extract_events(
                     event_type = EventType.OTHER
 
                 event = Event(
+                    event_id=e.get("event_id"),
+                    parent_event_id=e.get("parent_event_id"),
                     artist=artist_name,
                     event_type=event_type,
                     title=e.get("title", "Unknown Event"),
@@ -429,6 +478,8 @@ def extract_events_from_section(
                     event_type = EventType.OTHER
 
                 event = Event(
+                    event_id=e.get("event_id"),
+                    parent_event_id=e.get("parent_event_id"),
                     artist=artist_name,
                     event_type=event_type,
                     title=e.get("title", "Unknown Event"),
