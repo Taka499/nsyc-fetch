@@ -54,6 +54,12 @@ class Event(BaseModel):
     extracted_at: datetime = Field(default_factory=datetime.now)
     raw_text: str | None = Field(default=None, description="Original text snippet")
 
+    # Lifecycle
+    ended: bool = Field(
+        default=False,
+        description="True if event has passed or action window closed",
+    )
+
 
 class DetailPageContent(BaseModel):
     """Content fetched from a single detail page."""

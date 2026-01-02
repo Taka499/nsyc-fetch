@@ -24,7 +24,7 @@ To verify success, run `uv run nsyc-fetch --force` and observe:
 - [x] Milestone 1: Implement per-page extraction as default
 - [x] Milestone 2: Track detail page URLs in state
 - [x] Milestone 3: Detect and handle updates to known detail pages
-- [ ] Milestone 4: Add ended flag and event update logic
+- [x] Milestone 4: Add ended flag and event update logic
 
 
 ## Surprises & Discoveries
@@ -34,6 +34,8 @@ To verify success, run `uv run nsyc-fetch --force` and observe:
 - Milestone 2 (2026-01-02): Added `source_id` field to `DetailPageState` beyond what was originally planned. This allows filtering known pages by source during Milestone 3 implementation. Also added `detail_page_hashes` to `SourceContent` to pass per-page hashes from fetcher to main.py cleanly.
 
 - Milestone 3 (2026-01-02): Major refactor to separate URL discovery from detail page fetching. Removed `SourceContent` in favor of simpler `DetailPageContent`. The fetcher is now stateless with two functions: `discover_event_urls()` and `fetch_detail_page()`. All state logic moved to main.py orchestrator. Removed `source_hashes` from `FetchState` since we now track at detail page level only.
+
+- Milestone 4 (2026-01-02): Changed `save_events()` from conditional to always-run. Previously it only saved when new events were extracted, but we need to mark ended events on every run even when no pages changed.
 
 
 ## Decision Log
@@ -61,7 +63,22 @@ To verify success, run `uv run nsyc-fetch --force` and observe:
 
 ## Outcomes & Retrospective
 
-(To be filled after implementation)
+**Completed 2026-01-02**
+
+All four milestones completed successfully:
+
+1. **Per-page extraction**: Each detail page is now sent to the LLM independently. This eliminated context dilution and increased extraction accuracy.
+
+2. **Detail page state tracking**: `state.json` now tracks individual detail pages with their content hashes, enabling update detection.
+
+3. **Update detection**: The system merges known URLs with newly discovered ones. Pages are re-extracted only when their content hash changes.
+
+4. **Ended flag and upsert logic**: Events now have an `ended: bool` field. Past events are automatically marked as ended on every run. `save_events()` uses upsert logic to update existing events by signature rather than creating duplicates.
+
+**Verified behavior:**
+- 16 of 36 events correctly marked as `ended=True` (dates before 2026-01-02)
+- Active events sorted before ended events in output
+- `save_events()` runs on every fetch, even with no new events, to keep ended status current
 
 
 ## Context and Orientation

@@ -47,35 +47,89 @@ def load_events(events_path: str = "events.json") -> list[dict]:
     return []
 
 
+def event_signature(e: dict) -> str:
+    """Create a stable signature for matching events across runs."""
+    return f"{e['artist']}|{e['title']}|{e['date']}"
+
+
+def mark_ended_events(events: list[dict], current_time: datetime) -> int:
+    """Mark events as ended if their date has passed.
+
+    Returns the number of events marked as ended.
+    """
+    marked = 0
+    current_date_str = current_time.strftime("%Y-%m-%dT%H:%M:%S")
+
+    for event in events:
+        if event.get("ended"):
+            continue  # Already marked
+
+        event_date = event.get("date", "")
+        # Compare as strings (ISO format sorts correctly)
+        if event_date and event_date < current_date_str:
+            event["ended"] = True
+            marked += 1
+
+    return marked
+
+
 def save_events(events: list[Event], events_path: str = "events.json") -> None:
-    """Save events to JSON file, merging with existing events."""
+    """Save events to JSON file, merging with existing events.
+
+    Uses upsert logic: updates existing events by signature, adds new ones.
+    Preserves historical metadata (extracted_at) from existing events.
+    """
     existing = load_events(events_path)
+    now = datetime.now()
+
+    # Build a map of existing events by signature
+    existing_by_sig: dict[str, dict] = {}
+    for e in existing:
+        sig = event_signature(e)
+        existing_by_sig[sig] = e
 
     # Convert new events to dicts
     new_event_dicts = [e.model_dump(mode="json") for e in events]
 
-    # Create a set of existing event signatures for deduplication
-    def event_signature(e: dict) -> str:
-        return f"{e['artist']}|{e['title']}|{e['date']}"
-
-    existing_signatures = {event_signature(e) for e in existing}
-
-    # Add only new events
+    # Upsert: update existing or add new
     added = 0
+    updated = 0
     for event_dict in new_event_dicts:
         sig = event_signature(event_dict)
-        if sig not in existing_signatures:
-            existing.append(event_dict)
-            existing_signatures.add(sig)
+        if sig in existing_by_sig:
+            # Update existing event, preserving extracted_at
+            old_event = existing_by_sig[sig]
+            old_extracted_at = old_event.get("extracted_at")
+            old_event.update(event_dict)
+            if old_extracted_at:
+                old_event["extracted_at"] = old_extracted_at
+            updated += 1
+        else:
+            # Add new event
+            existing_by_sig[sig] = event_dict
             added += 1
 
-    # Sort by date (upcoming first)
-    existing.sort(key=lambda e: e.get("date", "9999-12-31"))
+    # Rebuild list from map
+    all_events = list(existing_by_sig.values())
+
+    # Mark ended events (date has passed)
+    ended_count = mark_ended_events(all_events, now)
+
+    # Sort by date (upcoming first), with ended events at the end
+    all_events.sort(key=lambda e: (e.get("ended", False), e.get("date", "9999-12-31")))
 
     with open(events_path, "w") as f:
-        json.dump(existing, f, indent=2, ensure_ascii=False, default=str)
+        json.dump(all_events, f, indent=2, ensure_ascii=False, default=str)
 
-    print(f"Added {added} new events. Total events: {len(existing)}")
+    status_parts = []
+    if added:
+        status_parts.append(f"added {added}")
+    if updated:
+        status_parts.append(f"updated {updated}")
+    if ended_count:
+        status_parts.append(f"marked {ended_count} ended")
+    status = ", ".join(status_parts) if status_parts else "no changes"
+    print(f"Events: {status}. Total: {len(all_events)}")
 
 
 def get_known_urls_for_source(
@@ -276,9 +330,8 @@ async def run_fetch(
         # Update state
         state.last_run = datetime.now()
 
-        # Save results
-        if all_events:
-            save_events(all_events, events_path)
+        # Save results (always call to mark ended events, even if no new events)
+        save_events(all_events, events_path)
         save_state(state, state_path)
 
     finally:

@@ -42,12 +42,14 @@ src/nsyc_fetch/
 **Key data flow:**
 
 1. `main.py:run_fetch()` loads `sources.yaml` and iterates over artists/sources
-2. `fetcher.py:fetch_source()` does two-pass fetching: listing page → detail pages
-3. Each detail page is extracted independently via `extractor.py` (per-page extraction)
+2. `fetcher.py:discover_event_urls()` finds detail page URLs from listing pages
+3. `fetcher.py:fetch_detail_page()` fetches each detail page independently
 4. Content hashes compared against `state.json` to skip unchanged pages
-5. Events deduplicated by signature `(artist|title|date)` and saved to `events.json`
-6. State hash updated only after successful extraction (retry-on-failure pattern)
-7. Logs saved to `logs/{timestamp}/{source_id}/` for debugging
+5. Each detail page is extracted independently via `extractor.py` (per-page extraction)
+6. Events upserted by signature `(artist|title|date)` — existing events updated, new ones added
+7. Past events automatically marked with `ended=True`
+8. State hash updated only after successful extraction (retry-on-failure pattern)
+9. Logs saved to `logs/{timestamp}/{source_id}/` for debugging
 
 **Key files (user-managed):**
 - `sources.yaml` — source configuration (what to monitor: artists, URLs, filter keywords)
@@ -76,7 +78,7 @@ src/nsyc_fetch/
 
 **sources.yaml is about "what to monitor", not "how to process"**: Keep user configuration minimal. Processing decisions (per-page extraction, update detection) are handled automatically by the system, not configured per-source.
 
-**Event lifecycle**: Detail pages change over time (lottery ends → new sale opens). The system monitors known detail pages for updates until the event date passes.
+**Event lifecycle**: Detail pages change over time (lottery ends → new sale opens). The system monitors known detail pages for updates until the event date passes. Events have an `ended` flag that is automatically set to `true` when the event date passes, distinguishing active from historical events.
 
 ## Environment
 
