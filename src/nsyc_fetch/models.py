@@ -20,6 +20,18 @@ class EventType(str, Enum):
 class Event(BaseModel):
     """A time-bound event that the user should know about."""
 
+    # Identifiers for deduplication and parent-child relationships
+    event_id: str | None = Field(
+        default=None,
+        description="Stable identifier for this event. Format: {normalized_title}-{date}. "
+        "Used for deduplication and parent references.",
+    )
+    parent_event_id: str | None = Field(
+        default=None,
+        description="For ticket phases (lottery/sale), references the parent concert's event_id. "
+        "None for standalone events like concerts or releases.",
+    )
+
     artist: str = Field(description="Artist or band name")
     event_type: EventType = Field(description="Type of event")
     title: str = Field(description="Event title")
