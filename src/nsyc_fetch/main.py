@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 from .extractor import extract_events_from_section
-from .fetcher import fetch_source
+from .fetcher import discover_event_urls, fetch_detail_page
 from .logger import close_logger, get_logger, init_logger
 from .models import DetailPageState, Event, FetchState
 
@@ -78,16 +78,45 @@ def save_events(events: list[Event], events_path: str = "events.json") -> None:
     print(f"Added {added} new events. Total events: {len(existing)}")
 
 
+def get_known_urls_for_source(
+    state: FetchState,
+    source_id: str,
+    current_time: datetime,
+) -> list[str]:
+    """Get known detail page URLs for a source that are still active.
+
+    A page is active if its event_date is in the future or not set.
+    """
+    known_urls = []
+    for url, page_state in state.detail_pages.items():
+        if page_state.source_id != source_id:
+            continue
+        # Include if event_date is None or in the future
+        if page_state.event_date is None or page_state.event_date > current_time:
+            known_urls.append(url)
+    return known_urls
+
+
 async def fetch_artist_events(
     artist_config: dict,
     openai_client: OpenAI,
     state: FetchState,
+    force: bool = False,
 ) -> list[Event]:
-    """Fetch and extract events for a single artist."""
+    """Fetch and extract events for a single artist.
+
+    Orchestrates the fetch → compare → extract flow:
+    1. Get known URLs from state (still active)
+    2. Discover new URLs from listing page
+    3. Merge known + new URLs
+    4. For each URL: fetch, compare hash, extract if changed
+    5. Update state
+    """
     artist_name = artist_config["name"]
     sources = artist_config.get("sources", [])
     all_events = []
     logger = get_logger()
+    current_time = datetime.now()
 
     print(f"\n{'=' * 50}")
     print(f"Processing: {artist_name}")
@@ -95,76 +124,58 @@ async def fetch_artist_events(
 
     for source in sources:
         source_id = source["id"]
-        url = source["url"]
+        listing_url = source["url"]
         filter_keywords = source.get("filter_keywords", [])
-        fetch_detail = source.get("fetch_detail_pages", True)
         max_detail_pages = source.get("max_detail_pages", 10)
 
-        print(f"\nFetching: {source_id}")
-        print(f"  URL: {url}")
-        print(f"  Detail pages: {'enabled' if fetch_detail else 'disabled'}")
+        print(f"\nSource: {source_id}")
+        print(f"  Listing URL: {listing_url}")
 
         try:
-            # Fetch content
-            content = await fetch_source(
-                source_id=source_id,
-                url=url,
-                filter_keywords=filter_keywords,
-                fetch_detail_pages=fetch_detail,
-                max_detail_pages=max_detail_pages,
-            )
+            # Step 1: Get known URLs from state (still active)
+            known_urls = get_known_urls_for_source(state, source_id, current_time)
+            print(f"  Known active pages: {len(known_urls)}")
 
-            # Log fetched content
-            combined = "\n---\n".join(content.relevant_sections)
-            detail_count = sum(
-                1 for s in content.relevant_sections if s.startswith("=== Detail Page:")
-            )
-            if logger:
-                logger.log_fetch(
-                    source_id=source_id,
-                    url=url,
-                    sections=content.relevant_sections,
-                    combined_content=combined,
-                    content_hash=content.content_hash,
-                    detail_pages_fetched=detail_count,
-                )
+            # Step 2: Discover new URLs from listing page
+            discovered_urls = await discover_event_urls(listing_url, filter_keywords)
+            discovered_urls = discovered_urls[:max_detail_pages]
+            print(f"  Discovered pages: {len(discovered_urls)}")
 
-            # Check if content changed
-            old_hash = state.source_hashes.get(source_id)
-            if old_hash == content.content_hash:
-                print(f"  No changes detected (hash: {content.content_hash[:8]})")
+            # Step 3: Merge known + discovered (deduplicated)
+            all_urls = list(dict.fromkeys(known_urls + discovered_urls))
+            print(f"  Total pages to check: {len(all_urls)}")
+
+            if not all_urls:
+                print("  No pages to process")
                 if logger:
-                    logger.log_skip(source_id, "Content unchanged")
+                    logger.log_skip(source_id, "No pages to process")
                 continue
 
-            print(f"  Content changed (hash: {content.content_hash[:8]})")
-            print(f"  Found {len(content.relevant_sections)} relevant sections")
+            # Step 4: Fetch each page, compare hash, extract if changed
+            source_events = []
+            page_index = 0
 
-            # Extract events using per-page extraction
-            # Each detail page is processed independently to avoid context dilution
-            detail_sections = [
-                s for s in content.relevant_sections if s.startswith("=== Detail Page:")
-            ]
+            for url in all_urls:
+                try:
+                    # Fetch the page
+                    page_content = await fetch_detail_page(url)
+                    old_state = state.detail_pages.get(url)
+                    old_hash = old_state.content_hash if old_state else None
+                    is_new = old_state is None
+                    has_changed = old_hash != page_content.content_hash
 
-            if detail_sections:
-                source_events = []
-                extraction_failed = False
-                page_index = 0
+                    # Skip if unchanged (unless force mode)
+                    if not force and not is_new and not has_changed:
+                        print(f"    [{page_index}] {url[:50]}... (unchanged)")
+                        page_index += 1
+                        continue
 
-                for section in detail_sections:
-                    # Extract URL from section header for logging
-                    first_line = section.split("\n")[0]
-                    detail_url = (
-                        first_line.replace("=== Detail Page:", "")
-                        .replace("===", "")
-                        .strip()
-                    )
-                    print(
-                        f"    Extracting from page {page_index}: {detail_url[:60]}..."
-                    )
+                    status = "new" if is_new else "changed"
+                    print(f"    [{page_index}] {url[:50]}... ({status})")
 
+                    # Extract events from this page
                     events = extract_events_from_section(
-                        section=section,
+                        section=page_content.content,
                         artist_name=artist_name,
                         source_url=url,
                         client=openai_client,
@@ -173,16 +184,14 @@ async def fetch_artist_events(
                     )
 
                     if events is None:
-                        # Extraction failed for this page
-                        print(f"    Extraction failed for page {page_index}")
-                        extraction_failed = True
+                        print("      Extraction failed")
+                        if logger:
+                            logger.log_error(source_id, f"Extraction failed: {url}")
                     else:
-                        # Extraction succeeded (may have 0 or more events)
                         if events:
-                            print(f"    Found {len(events)} events")
+                            print(f"      Found {len(events)} events")
                             source_events.extend(events)
 
-                            # Log extracted events for this page
                             if logger:
                                 logger.log_events(
                                     source_id=source_id,
@@ -190,52 +199,35 @@ async def fetch_artist_events(
                                     page_index=page_index,
                                 )
                         else:
-                            print("    No events found")
+                            print("      No events found")
 
-                        # Record detail page state for tracking updates
-                        # Find max event date to know when to stop monitoring this page
+                        # Update state for this page
                         max_event_date = None
                         if events:
                             event_dates = [e.date for e in events if e.date]
                             if event_dates:
                                 max_event_date = max(event_dates)
 
-                        page_hash = content.detail_page_hashes.get(detail_url, "")
-                        state.detail_pages[detail_url] = DetailPageState(
-                            url=detail_url,
-                            content_hash=page_hash,
-                            last_checked=datetime.now(),
+                        state.detail_pages[url] = DetailPageState(
+                            url=url,
+                            content_hash=page_content.content_hash,
+                            last_checked=current_time,
                             event_date=max_event_date,
                             source_id=source_id,
                         )
 
-                    page_index += 1
-
-                if extraction_failed:
-                    # At least one extraction failed - don't update hash, retry next run
-                    print("  Some extractions failed - will retry next run")
+                except Exception as e:
+                    print(f"    [{page_index}] {url[:50]}... ERROR: {e}")
                     if logger:
-                        logger.log_error(source_id, "Some page extractions failed")
-                    # Still add successfully extracted events
-                    all_events.extend(source_events)
-                    continue
+                        logger.log_error(source_id, f"Failed to fetch {url}: {e}")
 
-                print(
-                    f"  Extracted {len(source_events)} total events from {len(detail_sections)} pages"
-                )
-                all_events.extend(source_events)
+                page_index += 1
 
-                # Only update hash after all extractions succeed
-                state.source_hashes[source_id] = content.content_hash
-            else:
-                print("  No detail page sections found")
-                if logger:
-                    logger.log_skip(source_id, "No detail page sections")
-                # Still update hash if no sections (nothing to extract)
-                state.source_hashes[source_id] = content.content_hash
+            print(f"  Extracted {len(source_events)} events from {source_id}")
+            all_events.extend(source_events)
 
         except Exception as e:
-            print(f"  Error: {e}")
+            print(f"  Error processing source: {e}")
             if logger:
                 logger.log_error(source_id, str(e))
             continue
@@ -247,6 +239,7 @@ async def run_fetch(
     config_path: str = "sources.yaml",
     state_path: str = "state.json",
     events_path: str = "events.json",
+    force: bool = False,
 ) -> list[Event]:
     """Run the full fetch and extraction pipeline."""
 
@@ -276,6 +269,7 @@ async def run_fetch(
                 artist_config=artist_config,
                 openai_client=openai_client,
                 state=state,
+                force=force,
             )
             all_events.extend(events)
 
@@ -313,17 +307,18 @@ def main():
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Force re-fetch even if content hasn't changed",
+        help="Force re-extract even if content hasn't changed",
     )
 
     args = parser.parse_args()
 
-    # If force, clear state hashes
-    if args.force:
+    # If force, clear detail page hashes so everything is re-extracted
+    force = args.force
+    if force:
         state = load_state(args.state)
-        state.source_hashes = {}
+        state.detail_pages = {}
         save_state(state, args.state)
-        print("Cleared content hashes, will re-fetch all sources")
+        print("Cleared detail page state, will re-extract all pages")
 
     # Run async fetch
     events = asyncio.run(
@@ -331,6 +326,7 @@ def main():
             config_path=args.config,
             state_path=args.state,
             events_path=args.output,
+            force=force,
         )
     )
 

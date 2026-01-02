@@ -55,25 +55,12 @@ class Event(BaseModel):
     raw_text: str | None = Field(default=None, description="Original text snippet")
 
 
-class EventList(BaseModel):
-    """List of events extracted from a source."""
+class DetailPageContent(BaseModel):
+    """Content fetched from a single detail page."""
 
-    events: list[Event] = Field(default_factory=list)
-
-
-class SourceContent(BaseModel):
-    """Content fetched from a source."""
-
-    source_id: str
-    url: str
-    fetched_at: datetime
-    content_hash: str  # For change detection (combined hash of all content)
-    raw_html: str | None = None
-    extracted_text: str | None = None
-    relevant_sections: list[str] = Field(default_factory=list)
-    detail_page_hashes: dict[str, str] = Field(
-        default_factory=dict
-    )  # url -> content_hash for each detail page
+    url: str = Field(description="URL of the detail page")
+    content: str = Field(description="Extracted text content")
+    content_hash: str = Field(description="Hash for change detection")
 
 
 class DetailPageState(BaseModel):
@@ -97,10 +84,7 @@ class FetchState(BaseModel):
     """Persisted state to track what we've seen."""
 
     last_run: datetime | None = None
-    source_hashes: dict[str, str] = Field(
-        default_factory=dict
-    )  # source_id -> content_hash
     detail_pages: dict[str, DetailPageState] = Field(
         default_factory=dict
     )  # url -> DetailPageState
-    seen_event_ids: list[str] = Field(default_factory=list)  # To avoid duplicate events
+    seen_event_ids: list[str] = Field(default_factory=list)  # For future deduplication

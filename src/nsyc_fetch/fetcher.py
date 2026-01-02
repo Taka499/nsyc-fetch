@@ -1,14 +1,21 @@
-"""Fetch content from web sources."""
+"""Fetch content from web sources.
+
+This module provides stateless fetching functions:
+- discover_event_urls(): Find event detail page URLs from a listing page
+- fetch_detail_page(): Fetch a single detail page and return content + hash
+
+The orchestrator (main.py) handles all state logic: comparing hashes,
+deciding what to extract, and updating state.
+"""
 
 import hashlib
 import re
-from datetime import datetime
 from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
 
-from .models import SourceContent
+from .models import DetailPageContent
 
 
 async def fetch_webpage(url: str, timeout: float = 30.0) -> str:
@@ -25,26 +32,15 @@ async def fetch_webpage(url: str, timeout: float = 30.0) -> str:
         return response.text
 
 
-def extract_text_content(html: str) -> str:
-    """Extract readable text from HTML."""
-    soup = BeautifulSoup(html, "lxml")
-
-    # Remove script and style elements
-    for element in soup(["script", "style", "nav", "footer", "header"]):
-        element.decompose()
-
-    # Get text
-    text = soup.get_text(separator="\n", strip=True)
-
-    # Clean up whitespace
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    return "\n".join(lines)
+def compute_content_hash(content: str) -> str:
+    """Compute hash of content for change detection."""
+    return hashlib.sha256(content.encode()).hexdigest()[:16]
 
 
-def extract_event_links(
+def _extract_event_links(
     html: str, base_url: str, filter_keywords: list[str] | None = None
 ) -> list[str]:
-    """Extract links to event detail pages from a listing page.
+    """Extract links to event detail pages from a listing page HTML.
 
     Returns list of absolute URLs to event detail pages.
     """
@@ -84,49 +80,8 @@ def extract_event_links(
     return unique_links[:20]  # Limit to 20 detail pages
 
 
-def extract_event_sections(
-    html: str, filter_keywords: list[str] | None = None
-) -> list[str]:
-    """Extract sections that look like event listings."""
-    soup = BeautifulSoup(html, "lxml")
-    sections = []
-
-    # Look for common event container patterns
-    # BanG Dream! site uses article/section/div with specific classes
-    event_containers = soup.find_all(
-        ["article", "section", "div"],
-        class_=re.compile(r"event|news|live|schedule", re.I),
-    )
-
-    if not event_containers:
-        # Fallback: look for links containing event-related keywords
-        event_containers = soup.find_all(
-            "a", href=re.compile(r"/events/|/news/|/live/")
-        )
-
-    for container in event_containers:
-        text = container.get_text(separator=" ", strip=True)
-
-        # Apply keyword filter if provided
-        if filter_keywords:
-            if any(kw.lower() in text.lower() for kw in filter_keywords):
-                sections.append(text[:2000])  # Limit length
-        else:
-            sections.append(text[:2000])
-
-    # Deduplicate while preserving order
-    seen = set()
-    unique_sections = []
-    for s in sections:
-        if s not in seen:
-            seen.add(s)
-            unique_sections.append(s)
-
-    return unique_sections[:20]  # Limit to 20 sections
-
-
-def extract_detail_page_content(html: str) -> str:
-    """Extract the main content from an event detail page.
+def _extract_detail_page_content(html: str) -> str:
+    """Extract the main content from an event detail page HTML.
 
     More aggressive extraction focused on the main content area.
     """
@@ -160,69 +115,38 @@ def extract_detail_page_content(html: str) -> str:
     return "\n".join(lines)
 
 
-def compute_content_hash(content: str) -> str:
-    """Compute hash of content for change detection."""
-    return hashlib.sha256(content.encode()).hexdigest()[:16]
+# =============================================================================
+# Public API: Two simple stateless functions
+# =============================================================================
 
 
-async def fetch_source(
-    source_id: str,
-    url: str,
+async def discover_event_urls(
+    listing_url: str,
     filter_keywords: list[str] | None = None,
-    fetch_detail_pages: bool = True,
-    max_detail_pages: int = 10,
-) -> SourceContent:
-    """Fetch and process a single source.
+) -> list[str]:
+    """Fetch listing page and return discovered event detail page URLs.
 
     Args:
-        source_id: Unique identifier for this source
-        url: URL to fetch
-        filter_keywords: Keywords to filter relevant content
-        fetch_detail_pages: If True, also fetch linked detail pages
-        max_detail_pages: Maximum number of detail pages to fetch
+        listing_url: URL of the listing page (e.g., /events or /news)
+        filter_keywords: Optional keywords to filter relevant links
 
     Returns:
-        SourceContent with extracted text and sections
+        List of absolute URLs to event detail pages
     """
+    html = await fetch_webpage(listing_url)
+    return _extract_event_links(html, listing_url, filter_keywords)
 
-    # Fetch listing page
+
+async def fetch_detail_page(url: str) -> DetailPageContent:
+    """Fetch a single detail page and return structured content.
+
+    Args:
+        url: URL of the detail page to fetch
+
+    Returns:
+        DetailPageContent with url, content, and content_hash
+    """
     html = await fetch_webpage(url)
-    text = extract_text_content(html)
-    sections = extract_event_sections(html, filter_keywords)
-
-    # Fetch detail pages if enabled
-    detail_contents = []
-    detail_page_hashes: dict[str, str] = {}
-    if fetch_detail_pages:
-        event_links = extract_event_links(html, url, filter_keywords)
-        print(f"    Found {len(event_links)} detail page links")
-
-        for i, link in enumerate(event_links[:max_detail_pages]):
-            try:
-                print(f"    Fetching detail page {i + 1}: {link}")
-                detail_html = await fetch_webpage(link)
-                detail_text = extract_detail_page_content(detail_html)
-                detail_contents.append(f"=== Detail Page: {link} ===\n{detail_text}")
-                # Store per-page hash for state tracking
-                detail_page_hashes[link] = compute_content_hash(detail_text)
-            except Exception as e:
-                print(f"    Failed to fetch {link}: {e}")
-                continue
-
-    # Combine listing sections with detail page contents
-    all_sections = sections + detail_contents
-
-    # Hash based on all content
-    combined_text = text + "\n".join(detail_contents)
-    content_hash = compute_content_hash(combined_text)
-
-    return SourceContent(
-        source_id=source_id,
-        url=url,
-        fetched_at=datetime.now(),
-        content_hash=content_hash,
-        raw_html=html,
-        extracted_text=text,
-        relevant_sections=all_sections,
-        detail_page_hashes=detail_page_hashes,
-    )
+    content = _extract_detail_page_content(html)
+    content_hash = compute_content_hash(content)
+    return DetailPageContent(url=url, content=content, content_hash=content_hash)

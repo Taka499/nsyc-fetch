@@ -23,7 +23,7 @@ To verify success, run `uv run nsyc-fetch --force` and observe:
 
 - [x] Milestone 1: Implement per-page extraction as default
 - [x] Milestone 2: Track detail page URLs in state
-- [ ] Milestone 3: Detect and handle updates to known detail pages
+- [x] Milestone 3: Detect and handle updates to known detail pages
 - [ ] Milestone 4: Add ended flag and event update logic
 
 
@@ -32,6 +32,8 @@ To verify success, run `uv run nsyc-fetch --force` and observe:
 - Milestone 1 (2026-01-02): Per-page extraction significantly increases the number of events extracted. The previous batch approach was likely losing some events to context dilution. With per-page extraction, we now get more accurate lottery information for each event.
 
 - Milestone 2 (2026-01-02): Added `source_id` field to `DetailPageState` beyond what was originally planned. This allows filtering known pages by source during Milestone 3 implementation. Also added `detail_page_hashes` to `SourceContent` to pass per-page hashes from fetcher to main.py cleanly.
+
+- Milestone 3 (2026-01-02): Major refactor to separate URL discovery from detail page fetching. Removed `SourceContent` in favor of simpler `DetailPageContent`. The fetcher is now stateless with two functions: `discover_event_urls()` and `fetch_detail_page()`. All state logic moved to main.py orchestrator. Removed `source_hashes` from `FetchState` since we now track at detail page level only.
 
 
 ## Decision Log
@@ -50,6 +52,10 @@ To verify success, run `uv run nsyc-fetch --force` and observe:
 
 - Decision: Keep ended events for historical record rather than deleting them.
   Rationale: Users may want to review past events, and the data volume is low. An `ended: true` flag distinguishes active from historical events without losing data.
+  Date/Author: 2026-01-02
+
+- Decision: Separate URL discovery from detail page fetching with stateless fetcher.
+  Rationale: The original `fetch_source()` mixed concerns: discovering URLs, fetching detail pages, formatting content, and computing hashes. For update detection (Milestone 3), we need to compare fetched content against stored state. Rather than making the fetcher state-aware, we split it into two simple functions: `discover_event_urls()` returns URLs from the listing page, `fetch_detail_page()` fetches a single page and returns (content, hash). The orchestrator in main.py handles all state logic: merging known URLs with newly discovered ones, comparing hashes, deciding what to extract, and updating state. This keeps the fetcher pure (URL in → content out) and puts all state management in one place.
   Date/Author: 2026-01-02
 
 
@@ -163,27 +169,30 @@ After fetching each detail page, record its URL and content hash in `state.detai
 
 Each run should re-check known detail pages (not just new ones from the listing page).
 
-**New function in `fetcher.py`**:
+**Refactor `fetcher.py`** into two stateless functions:
 
-    async def fetch_known_detail_pages(
-        known_pages: dict[str, DetailPageState],
-        current_date: datetime,
-    ) -> list[tuple[str, str, bool]]:  # (url, content, changed)
-        """Fetch known detail pages and check for changes.
+    async def discover_event_urls(
+        listing_url: str,
+        filter_keywords: list[str] | None = None,
+    ) -> list[str]:
+        """Fetch listing page and return discovered event detail page URLs."""
 
-        Only fetches pages where event_date > current_date (still active).
-        Returns list of (url, content, changed_flag).
-        """
+    async def fetch_detail_page(url: str) -> tuple[str, str]:
+        """Fetch a single detail page. Returns (content, content_hash)."""
 
-**Modifications to `main.py:fetch_artist_events()`**:
+**Rewrite `main.py` orchestration**:
 
-1. Before fetching listing page, gather known detail page URLs for this source
-2. Fetch listing page and discover new detail page URLs
-3. For both known AND new detail pages:
-   - Fetch content
-   - Compare hash to detect changes
-   - If new or changed, extract events
-4. Update `state.detail_pages` with current hashes
+The orchestrator handles all state logic:
+
+1. Get known URLs from `state.detail_pages` for this source (filter by `event_date > now`)
+2. Discover new URLs from listing page via `discover_event_urls()`
+3. Merge: `all_urls = known_urls ∪ new_urls`
+4. For each URL in `all_urls`:
+   - Fetch via `fetch_detail_page()`
+   - Compare hash with `state.detail_pages[url].content_hash`
+   - If new or changed → extract events
+   - Update `state.detail_pages[url]` with new hash and timestamp
+5. Save state after processing all sources
 
 
 ### Milestone 4: Add Ended Flag and Event Update Logic
