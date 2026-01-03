@@ -17,6 +17,26 @@ class EventType(str, Enum):
     OTHER = "other"
 
 
+class TicketRequirement(str, Enum):
+    """What you need to participate in the lottery/sale."""
+
+    CD = "cd"  # Requires CD/Blu-ray serial code purchase
+    FC = "fc"  # Requires fan club membership
+    PLAYGUIDE = "playguide"  # Through ticket vendor (e+, Lawson, etc.)
+    NONE = "none"  # No special requirement (general public)
+    OTHER = "other"  # Doesn't fit above categories
+
+
+class TicketPriority(str, Enum):
+    """Which round/priority level in the ticket sale sequence."""
+
+    FASTEST = "fastest"  # 最速先行, 1次先行
+    SECONDARY = "secondary"  # 2次先行
+    TERTIARY = "tertiary"  # 3次先行
+    GENERAL = "general"  # 一般発売
+    OTHER = "other"  # Doesn't fit pattern
+
+
 class Event(BaseModel):
     """A time-bound event that the user should know about."""
 
@@ -30,6 +50,27 @@ class Event(BaseModel):
         default=None,
         description="For ticket phases (lottery/sale), references the parent concert's event_id. "
         "None for standalone events like concerts or releases.",
+    )
+
+    # LLM provides this for parent resolution
+    parent_title: str | None = Field(
+        default=None,
+        description="For lottery/sale events, the exact title of the parent concert.",
+    )
+
+    # Ticket phase fields (LLM provides for lottery/sale)
+    ticket_requirement: TicketRequirement | None = Field(
+        default=None,
+        description="What you need to participate: cd, fc, playguide, none, other.",
+    )
+    ticket_priority: TicketPriority | None = Field(
+        default=None,
+        description="Which round: fastest, secondary, tertiary, general, other.",
+    )
+    ticket_requirement_detail: str | None = Field(
+        default=None,
+        description="For CD requirement, the specific product name. "
+        "E.g., '8th Single「静降想」初回限定盤'",
     )
 
     artist: str = Field(description="Artist or band name")
