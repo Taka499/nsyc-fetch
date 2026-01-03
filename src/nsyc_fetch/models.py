@@ -1,5 +1,6 @@
 """Data models for NSYC Fetch."""
 
+import re
 from datetime import datetime
 from enum import Enum
 
@@ -147,3 +148,71 @@ class FetchState(BaseModel):
         default_factory=dict
     )  # url -> DetailPageState
     seen_event_ids: list[str] = Field(default_factory=list)  # For future deduplication
+
+
+def generate_event_id(
+    title: str,
+    date: datetime,
+    event_type: str | None = None,
+    ticket_requirement: str | None = None,
+    ticket_priority: str | None = None,
+) -> str:
+    """Generate a stable, deterministic event ID.
+
+    Args:
+        title: Event title (e.g., "MyGO!!!!! 9th LIVE")
+        date: Event date
+        event_type: For lottery/sale, adds to suffix
+        ticket_requirement: For lottery/sale, adds to suffix (cd, fc, playguide, none)
+        ticket_priority: For lottery/sale, adds to suffix (fastest, secondary, etc.)
+
+    Returns:
+        Normalized ID like:
+        - "mygo-9th-live-2026-07-18" (concert)
+        - "mygo-9th-live-2026-07-18-lottery-cd-fastest" (CD最速先行)
+    """
+    # Normalize title
+    normalized = title.lower()
+
+    # Remove common lottery/sale suffixes from title
+    lottery_patterns = [
+        r"最速先行.*$",
+        r"[1-9]次先行.*$",
+        r"cd先行.*$",
+        r"シリアル先行.*$",
+        r"fc先行.*$",
+        r"ファンクラブ先行.*$",
+        r"プレイガイド先行.*$",
+        r"一般発売.*$",
+        r"先行抽選.*$",
+        r"抽選.*$",
+    ]
+    for pattern in lottery_patterns:
+        normalized = re.sub(pattern, "", normalized, flags=re.IGNORECASE)
+
+    # Replace Japanese brackets with hyphens
+    normalized = normalized.replace("「", "-").replace("」", "-")
+
+    # Remove special characters except hyphens and alphanumeric
+    normalized = re.sub(r"[^\w\s\-]", "", normalized)
+
+    # Collapse whitespace to single hyphen
+    normalized = re.sub(r"\s+", "-", normalized.strip())
+
+    # Remove consecutive hyphens
+    normalized = re.sub(r"-+", "-", normalized)
+
+    # Strip leading/trailing hyphens
+    normalized = normalized.strip("-")
+
+    # Add date
+    date_str = date.strftime("%Y-%m-%d")
+    event_id = f"{normalized}-{date_str}"
+
+    # Add suffix for lottery/sale events
+    if event_type in ("lottery", "sale"):
+        requirement = ticket_requirement or "other"
+        priority = ticket_priority or "other"
+        event_id = f"{event_id}-{event_type}-{requirement}-{priority}"
+
+    return event_id

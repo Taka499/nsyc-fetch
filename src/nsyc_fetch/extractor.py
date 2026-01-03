@@ -7,150 +7,244 @@ from datetime import datetime
 from openai import OpenAI
 
 from .logger import get_logger
-from .models import Event, EventType
+from .models import (
+    Event,
+    EventType,
+    TicketPriority,
+    TicketRequirement,
+    generate_event_id,
+)
 
 EXTRACTION_PROMPT = """You are an event extraction assistant for Japanese entertainment content.
 Given the following content from {source_url}, extract any time-bound events related to the artist "{artist_name}".
 
 For each event found, extract:
-1. event_id: A stable identifier (see EVENT ID FORMAT below)
-2. parent_event_id: For lottery/sale events, the parent concert's event_id (see PARENT-CHILD RELATIONSHIPS below)
-3. event_type: One of: live, release, lottery, sale, broadcast, streaming, screening, other
-4. title: Event title (in original language)
-5. date: Event date (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)
-6. end_date: End date if it's a multi-day event or period (optional)
-7. venue: Venue name (optional, for live events)
-8. location: City/area (optional)
-9. action_required: true if user needs to take action (buy tickets, apply for lottery, etc.)
-10. action_deadline: Deadline for action if applicable (ISO format)
-11. action_description: What action is needed - BE SPECIFIC about prerequisites
-12. event_url: URL for event details (optional)
-13. ticket_url: URL for ticket purchase (optional)
-
-## EVENT ID FORMAT
-
-Generate event_id as: lowercase-title-words-YYYY-MM-DD
-
-Examples:
-- "MyGO!!!!! 9th LIVE" on 2026-07-18 → "mygo-9th-live-2026-07-18"
-- "Ave Mujica LIVE TOUR 2026「Exitus」" starting 2026-04-17 → "ave-mujica-live-tour-2026-exitus-2026-04-17"
-
-Rules:
-- Use the EVENT date (concert date for live events, start date for lotteries)
-- Remove special characters (!!!!, ×, ♪, etc.)
-- Replace spaces and Japanese brackets「」with hyphens
-- All lowercase
-- For lottery/sale events, append the phase type suffix (see below)
-
-Lottery/sale event_id suffixes:
-- `-lottery-cd` for CD先行/シリアル先行 (CD/serial code lottery)
-- `-lottery-fc` for FC先行 (fan club lottery)
-- `-lottery-fastest` for 最速先行 (fastest priority)
-- `-lottery-playguide` for プレイガイド先行 (playguide lottery)
-- `-sale-general` for 一般発売 (general sale)
+1. event_type: One of: live, release, lottery, sale, broadcast, streaming, screening, other
+2. title: Event title (in original language)
+3. date: Event date (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)
+4. end_date: End date if it's a multi-day event or period (optional)
+5. venue: Venue name (optional, for live events)
+6. location: City/area (optional)
+7. action_required: true if user needs to take action
+8. action_deadline: Deadline for action if applicable (ISO format)
+9. action_description: What action is needed - BE SPECIFIC
+10. event_url: URL for event details (optional)
+11. ticket_url: URL for ticket purchase (optional)
+12. parent_title: For lottery/sale events ONLY, exact title of parent concert
+13. ticket_requirement: For lottery/sale ONLY, what you need (see TICKET REQUIREMENT)
+14. ticket_priority: For lottery/sale ONLY, which round (see TICKET PRIORITY)
+15. ticket_requirement_detail: For CD/serial requirement ONLY, the specific product name
 
 ## PARENT-CHILD RELATIONSHIPS
 
-Ticket phases (lottery, sale) are CHILDREN of their parent concert. Link them using parent_event_id.
+Ticket phases (lottery, sale) are CHILDREN of their parent concert.
 
-CRITICAL: For lottery/sale events, parent_event_id MUST reference the parent concert's event_id.
+For lottery/sale events:
+- Set `parent_title` to the EXACT title of the parent concert
+- The parent concert should be extracted as a separate "live" event
 
-Example - A concert "Artist 9th LIVE" on 2026-07-18 with a CD lottery:
+For concerts, releases, and other standalone events:
+- Set `parent_title`, `ticket_requirement`, `ticket_priority`, `ticket_requirement_detail` to null
 
-Concert (parent):
-- event_id: "artist-9th-live-2026-07-18"
-- parent_event_id: null
-- event_type: "live"
+## TICKET REQUIREMENT (what you need to participate)
 
-CD Lottery (child):
-- event_id: "artist-9th-live-2026-07-18-lottery-cd"
-- parent_event_id: "artist-9th-live-2026-07-18"
-- event_type: "lottery"
+| ticket_requirement | Japanese Terms | Description |
+|--------------------|----------------|-------------|
+| "cd" | CD先行, シリアル先行, BD先行, 封入特典 | Requires purchasing CD/Blu-ray with serial code |
+| "fc" | FC先行, ファンクラブ先行, 会員限定 | Requires fan club membership |
+| "playguide" | プレイガイド先行, e+先行, ローチケ先行 | Through ticket vendors |
+| "none" | 一般発売, 一般販売 | No special requirement |
+| "other" | (anything else) | Doesn't fit above |
 
-## TICKET LOTTERY PATTERNS (先行抽選)
+## TICKET PRIORITY (which round in the sequence)
 
-Japanese events often have multiple lottery/sale phases. Create SEPARATE events for each phase:
+| ticket_priority | Japanese Terms | Description |
+|-----------------|----------------|-------------|
+| "fastest" | 最速先行, 1次先行, 最速抽選 | First/fastest round |
+| "secondary" | 2次先行, 2次抽選 | Second round |
+| "tertiary" | 3次先行, 3次抽選 | Third round |
+| "general" | 一般発売, 一般販売 | General sale (final) |
+| "other" | (anything else) | Doesn't fit above |
 
-1. CD先行/シリアル先行 (CD Priority Lottery):
-   When you see patterns like:
-   - "○○に封入の申込券でご応募" (apply using voucher included in ○○)
-   - "シリアルコードでご応募" (apply using serial code)
-   - "初回生産分" or "初回限定盤" (first-press or limited edition)
+## TICKET REQUIREMENT DETAIL
 
-   This means lottery requires purchasing a specific product FIRST.
-   Extract as event_type: "lottery" with action_description that includes:
-   - The product name (e.g., "8th Single「静降想」")
-   - That it requires the serial code/voucher from that product
-   Example: "Apply for lottery using serial code from 8th Single (first-press edition)"
+When ticket_requirement is "cd", extract the SPECIFIC product name:
+- Include the full product title
+- Include edition info (初回限定盤, 通常盤, etc.)
+- This helps users know WHICH product to buy
 
-2. 最速先行 / FC先行 (Priority Lottery):
-   Fan club or fastest priority lottery. Note any membership requirements.
+Examples:
+- "8th Single「静降想」初回生産分"
+- "ALBUM「JUNK」初回生産限定盤"
+- "Blu-ray「わかれ道の、その先へ」初回生産分"
 
-3. 一般発売 (General Sale):
-   Regular ticket sales, extract as event_type: "sale"
+## IMPORTANT: MULTIPLE ROUNDS WITH SAME REQUIREMENT
 
-4. プレイガイド先行 (Playguide Priority):
-   Priority lottery through ticket vendors, no product required.
-   Extract as event_type: "lottery"
+A concert may have MULTIPLE lotteries requiring different CDs:
+- 最速先行 requiring CD-A
+- 2次先行 requiring CD-B
 
-CRITICAL: For each concert/live, you MUST create SEPARATE events:
-- One "live" event for the actual concert (action_required: false, parent_event_id: null)
-- One "lottery" or "sale" event for EACH ticket phase with:
-  - parent_event_id = the concert's event_id
-  - date/end_date = the APPLICATION PERIOD (not the concert date)
-  - action_deadline = when applications close
-  - action_description = specific requirements (CD name, lottery type, etc.)
+Create SEPARATE events for each. The combination of (parent_title + ticket_requirement + ticket_priority + ticket_requirement_detail) should be unique.
 
-DO NOT put lottery information on the "live" event. Create separate "lottery" events.
+Example for Yonezu Kenshi tour:
 
-Pay special attention to:
-- 先行抽選 / 抽選 (lottery) - extract application period as "lottery" event
-- 先行発売 / 一般発売 (ticket sales) - note as "sale" event type
-- ライブ / LIVE / 公演 (concerts) - note as "live" event type
-- CD / アルバム / シングル releases - note as "release" event type
-- 配信 / Streaming (online viewing) - note as "streaming" event type
+```json
+{{
+  "event_type": "lottery",
+  "title": "Yonezu Kenshi TOUR 2026 最速先行",
+  "parent_title": "Yonezu Kenshi TOUR 2026",
+  "ticket_requirement": "cd",
+  "ticket_priority": "fastest",
+  "ticket_requirement_detail": "ALBUM「JUNK」初回限定盤",
+  "action_description": "Apply using serial code from ALBUM JUNK (first-press edition)"
+}}
+```
+
+```json
+{{
+  "event_type": "lottery",
+  "title": "Yonezu Kenshi TOUR 2026 2次先行",
+  "parent_title": "Yonezu Kenshi TOUR 2026",
+  "ticket_requirement": "cd",
+  "ticket_priority": "secondary",
+  "ticket_requirement_detail": "Single「○○」初回限定盤",
+  "action_description": "Apply using serial code from Single ○○ (first-press edition)"
+}}
+```
+
+## CRITICAL RULES
+
+1. For each concert, create ONE "live" event (parent)
+2. Create SEPARATE "lottery"/"sale" events for EACH ticket phase (children)
+3. Each lottery/sale MUST have:
+   - parent_title matching concert's exact title
+   - ticket_requirement set
+   - ticket_priority set
+   - ticket_requirement_detail set (if requirement is "cd")
+4. Lottery date/end_date = APPLICATION PERIOD (not concert date)
+5. action_deadline = when applications close
 
 Content to analyze:
 ---
 {content}
 ---
 
-Respond ONLY with a JSON object in this exact format (no markdown, no explanation):
+Respond ONLY with a JSON object (no markdown, no explanation):
 {{"events": [
   {{
-    "event_id": "artist-9th-live-2026-07-18",
-    "parent_event_id": null,
     "event_type": "live",
-    "title": "Artist Name 9th LIVE",
+    "title": "MyGO!!!!! 9th LIVE",
     "date": "2026-07-18",
     "end_date": "2026-07-19",
-    "venue": "Venue Name",
+    "venue": "ぴあアリーナMM",
     "location": "Yokohama",
     "action_required": false,
     "action_deadline": null,
     "action_description": null,
     "event_url": "https://...",
-    "ticket_url": null
+    "ticket_url": null,
+    "parent_title": null,
+    "ticket_requirement": null,
+    "ticket_priority": null,
+    "ticket_requirement_detail": null
   }},
   {{
-    "event_id": "artist-9th-live-2026-07-18-lottery-cd",
-    "parent_event_id": "artist-9th-live-2026-07-18",
     "event_type": "lottery",
-    "title": "Artist Name 9th LIVE CD先行抽選",
+    "title": "MyGO!!!!! 9th LIVE 最速先行抽選",
     "date": "2025-12-06",
     "end_date": "2026-02-02",
     "venue": null,
     "location": null,
     "action_required": true,
     "action_deadline": "2026-02-02T23:59:00",
-    "action_description": "Apply using serial code from 8th Single (first-press)",
+    "action_description": "Apply using serial code from 8th Single (first-press edition)",
     "event_url": "https://...",
-    "ticket_url": "https://..."
+    "ticket_url": null,
+    "parent_title": "MyGO!!!!! 9th LIVE",
+    "ticket_requirement": "cd",
+    "ticket_priority": "fastest",
+    "ticket_requirement_detail": "8th Single「静降想」初回限定盤"
   }}
 ]}}
 
 If no events are found, respond with: {{"events": []}}
 """
+
+
+def process_extracted_events(events: list[Event]) -> list[Event]:
+    """Post-process extracted events: generate event_ids and resolve parent references.
+
+    Args:
+        events: List of events from LLM
+
+    Returns:
+        Events with event_id and parent_event_id populated
+    """
+    # Step 1: Build lookup of concerts by title
+    concerts_by_title: dict[str, Event] = {}
+    for event in events:
+        if event.event_type == EventType.LIVE:
+            concerts_by_title[event.title] = event
+
+    # Step 2: Generate event_id for concerts first
+    for event in events:
+        if event.event_type == EventType.LIVE:
+            event.event_id = generate_event_id(
+                title=event.title,
+                date=event.date,
+            )
+
+    # Step 3: Generate event_id for lottery/sale and resolve parent
+    for event in events:
+        if event.event_type not in (EventType.LOTTERY, EventType.SALE):
+            continue
+
+        # Get parent concert
+        parent = None
+        if event.parent_title:
+            parent = concerts_by_title.get(event.parent_title)
+
+        # Determine base title and date for ID
+        if parent:
+            base_title = parent.title
+            base_date = parent.date
+            event.parent_event_id = parent.event_id
+        else:
+            base_title = event.title
+            base_date = event.date
+            event.parent_event_id = None
+
+        # Generate event_id with requirement and priority
+        requirement = (
+            event.ticket_requirement.value if event.ticket_requirement else "other"
+        )
+        priority = event.ticket_priority.value if event.ticket_priority else "other"
+
+        event.event_id = generate_event_id(
+            title=base_title,
+            date=base_date,
+            event_type=event.event_type.value,
+            ticket_requirement=requirement,
+            ticket_priority=priority,
+        )
+
+    # Step 4: Generate event_id for remaining events (release, broadcast, etc.)
+    for event in events:
+        if event.event_id is None:
+            event.event_id = generate_event_id(
+                title=event.title,
+                date=event.date,
+            )
+
+    # Step 5: Log unknown values for observability
+    for event in events:
+        if event.event_type in (EventType.LOTTERY, EventType.SALE):
+            if event.ticket_requirement == TicketRequirement.OTHER:
+                print(f"  [WARN] Unknown ticket_requirement for: {event.title}")
+            if event.ticket_priority == TicketPriority.OTHER:
+                print(f"  [WARN] Unknown ticket_priority for: {event.title}")
+
+    return events
 
 
 def create_openai_client() -> OpenAI:
@@ -263,9 +357,25 @@ def extract_events(
                 except ValueError:
                     event_type = EventType.OTHER
 
+                # Parse ticket_requirement
+                raw_requirement = e.get("ticket_requirement")
+                ticket_requirement = None
+                if raw_requirement:
+                    try:
+                        ticket_requirement = TicketRequirement(raw_requirement)
+                    except ValueError:
+                        ticket_requirement = TicketRequirement.OTHER
+
+                # Parse ticket_priority
+                raw_priority = e.get("ticket_priority")
+                ticket_priority = None
+                if raw_priority:
+                    try:
+                        ticket_priority = TicketPriority(raw_priority)
+                    except ValueError:
+                        ticket_priority = TicketPriority.OTHER
+
                 event = Event(
-                    event_id=e.get("event_id"),
-                    parent_event_id=e.get("parent_event_id"),
                     artist=artist_name,
                     event_type=event_type,
                     title=e.get("title", "Unknown Event"),
@@ -279,12 +389,23 @@ def extract_events(
                     event_url=e.get("event_url"),
                     ticket_url=e.get("ticket_url"),
                     source_url=source_url,
+                    # Parent resolution fields
+                    parent_title=e.get("parent_title"),
+                    # Ticket phase fields
+                    ticket_requirement=ticket_requirement,
+                    ticket_priority=ticket_priority,
+                    ticket_requirement_detail=e.get("ticket_requirement_detail"),
+                    # Leave for post-processing
+                    event_id=None,
+                    parent_event_id=None,
                 )
                 events.append(event)
-            except Exception as e:
-                print(f"Warning: Failed to parse event: {e}")
+            except Exception as parse_err:
+                print(f"Warning: Failed to parse event: {parse_err}")
                 continue
 
+        # Post-process to generate event_ids and resolve parents
+        events = process_extracted_events(events)
         return events
 
     except json.JSONDecodeError as e:
@@ -477,9 +598,25 @@ def extract_events_from_section(
                 except ValueError:
                     event_type = EventType.OTHER
 
+                # Parse ticket_requirement
+                raw_requirement = e.get("ticket_requirement")
+                ticket_requirement = None
+                if raw_requirement:
+                    try:
+                        ticket_requirement = TicketRequirement(raw_requirement)
+                    except ValueError:
+                        ticket_requirement = TicketRequirement.OTHER
+
+                # Parse ticket_priority
+                raw_priority = e.get("ticket_priority")
+                ticket_priority = None
+                if raw_priority:
+                    try:
+                        ticket_priority = TicketPriority(raw_priority)
+                    except ValueError:
+                        ticket_priority = TicketPriority.OTHER
+
                 event = Event(
-                    event_id=e.get("event_id"),
-                    parent_event_id=e.get("parent_event_id"),
                     artist=artist_name,
                     event_type=event_type,
                     title=e.get("title", "Unknown Event"),
@@ -493,12 +630,23 @@ def extract_events_from_section(
                     event_url=e.get("event_url"),
                     ticket_url=e.get("ticket_url"),
                     source_url=detail_url,
+                    # Parent resolution fields
+                    parent_title=e.get("parent_title"),
+                    # Ticket phase fields
+                    ticket_requirement=ticket_requirement,
+                    ticket_priority=ticket_priority,
+                    ticket_requirement_detail=e.get("ticket_requirement_detail"),
+                    # Leave for post-processing
+                    event_id=None,
+                    parent_event_id=None,
                 )
                 events.append(event)
             except Exception as parse_err:
                 print(f"Warning: Failed to parse event: {parse_err}")
                 continue
 
+        # Post-process to generate event_ids and resolve parents
+        events = process_extracted_events(events)
         return events
 
     except json.JSONDecodeError as e:
