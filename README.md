@@ -67,24 +67,93 @@ uv run nsyc-fetch --config my-sources.yaml --output my-events.json
 
 ### sources.yaml
 
-Define artists and their official sources. Keep it simple — just specify what to monitor:
+Create a `sources.yaml` file to define what to monitor. The file has a simple structure:
+
+```yaml
+artists:
+  - name: Artist Name
+    keywords:           # Optional: alternative names for matching
+      - AltName
+    sources:
+      - id: unique-source-id
+        url: https://example.com/events
+        filter_keywords: # Optional: only follow links containing these
+          - keyword
+```
+
+#### Full Example
 
 ```yaml
 artists:
   - name: MyGO!!!!!
     keywords:
       - MyGO
+      - マイゴ
     sources:
+      # Events listing page
       - id: bangdream-events-mygo
         url: https://bang-dream.com/events
+        description: BanG Dream! official events page
+        max_detail_pages: 10
         filter_keywords:
           - MyGO
+
+      # News page (same site, different section)
+      - id: bangdream-news-mygo
+        url: https://bang-dream.com/news
+        description: BanG Dream! official news page
+        max_detail_pages: 5
+        filter_keywords:
+          - MyGO
+
+  - name: Ave Mujica
+    keywords:
+      - Ave Mujica
+      - アヴェムジカ
+    sources:
+      - id: bangdream-events-avemujica
+        url: https://bang-dream.com/events
+        max_detail_pages: 10
+        filter_keywords:
+          - Ave Mujica
+          - アヴェ
 ```
 
-The system automatically:
-- Fetches the listing page and discovers detail page links
-- Extracts each detail page independently for accuracy
-- Monitors known pages for updates (lottery ended → new sale opened)
+#### Field Reference
+
+**Artist fields:**
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Artist display name used in extracted events |
+| `keywords` | No | Alternative names/spellings for the artist |
+| `sources` | Yes | List of sources to monitor |
+
+**Source fields:**
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `id` | Yes | — | Unique identifier for this source (used in state tracking) |
+| `url` | Yes | — | Listing page URL to scrape for event links |
+| `filter_keywords` | No | `[]` | Only follow links whose text/URL contains one of these keywords |
+| `max_detail_pages` | No | `10` | Maximum number of detail pages to fetch per source |
+| `description` | No | — | Human-readable description (for your reference) |
+
+#### How It Works
+
+1. **Listing page fetch**: The system fetches the `url` you specify
+2. **Link discovery**: Finds all links to detail pages (matching `/events/`, `/news/` patterns)
+3. **Keyword filtering**: If `filter_keywords` is set, only follows links containing those keywords
+4. **Detail page extraction**: Each detail page is sent to the LLM independently for accurate extraction
+5. **Change detection**: Pages are tracked by content hash; unchanged pages are skipped on subsequent runs
+6. **Continuous monitoring**: Known pages are re-checked until the event date passes
+
+#### Tips
+
+- **One source per listing page**: If a site has separate `/events` and `/news` sections, create separate sources for each
+- **Use filter_keywords**: Essential when multiple artists share the same listing page
+- **Start with max_detail_pages: 5**: Increase if you're missing events, decrease to save API costs
+- **Use descriptive ids**: Makes debugging easier (e.g., `sitename-section-artist` pattern)
 
 ### Output: events.json
 
@@ -145,19 +214,8 @@ The system automatically:
 
 ### Add a new artist
 
-Edit `sources.yaml`:
-
-```yaml
-artists:
-  - name: Your Artist
-    sources:
-      - id: artist-official
-        url: https://example.com/news
-        filter_keywords:
-          - keyword1
-```
-
-Run `uv run nsyc-fetch --force` to fetch immediately.
+1. Edit `sources.yaml` and add a new artist entry (see [sources.yaml](#sourcesyaml) for field reference)
+2. Run `uv run nsyc-fetch --force` to fetch immediately
 
 ### Export to Google Calendar
 
