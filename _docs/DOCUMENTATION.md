@@ -182,7 +182,7 @@ This is a **monitoring problem**, not a search problem.
 │                    Output (events.json)                          │
 │                                                                  │
 │   - Merge with existing events                                   │
-│   - Deduplicate by (artist, title, date)                        │
+│   - Deduplicate by event_id                                      │
 │   - Sort by date                                                 │
 │   - Ready for calendar integration                               │
 └─────────────────────────────────────────────────────────────────┘
@@ -229,21 +229,29 @@ for link in links[:max_detail_pages]:
 
 **Problem:** Don't waste API calls if nothing changed.
 
-**Solution:**
+**Solution:** Per-page hash tracking:
 
 ```python
-# Compute hash of all fetched content
-content_hash = hashlib.sha256(combined_content.encode()).hexdigest()[:16]
+# For each detail page URL
+page_content = await fetch_detail_page(url)
+old_state = state.detail_pages.get(url)
+old_hash = old_state.content_hash if old_state else None
 
-# Compare with stored hash
-if state.source_hashes.get(source_id) == content_hash:
+# Skip if unchanged
+if old_hash == page_content.content_hash:
     print("No changes detected")
-    return  # Skip extraction
+    continue  # Skip extraction for this page
 
 # Only update hash AFTER successful extraction
-events = extract_events(content)
+events = extract_events(page_content.content)
 if events is not None:  # None = failure, [] = success with no events
-    state.source_hashes[source_id] = content_hash
+    state.detail_pages[url] = DetailPageState(
+        url=url,
+        content_hash=page_content.content_hash,
+        last_checked=now,
+        event_date=max_event_date,
+        source_id=source_id,
+    )
 ```
 
 ### LLM Extraction Prompt
@@ -261,6 +269,8 @@ Pay special attention to:
 - CD / アルバム / シングル releases - note as "release" event
 
 For each event, extract:
+- event_id: Stable identifier (lowercase-title-YYYY-MM-DD)
+- parent_event_id: For lottery/sale, the parent concert's event_id
 - event_type: live, lottery, sale, release, streaming, screening, other
 - title: Event title (original language)
 - date: Start date (ISO format)
@@ -395,7 +405,6 @@ artists:
         type: webpage
         url: https://bang-dream.com/events
         description: BanG Dream! official events page
-        fetch_detail_pages: true       # Follow links to detail pages
         max_detail_pages: 10           # Limit detail pages per source
         filter_keywords:               # Only fetch pages containing these
           - MyGO
@@ -409,7 +418,6 @@ artists:
       - id: bangdream-events-avemujica
         type: webpage
         url: https://bang-dream.com/events
-        fetch_detail_pages: true
         max_detail_pages: 10
         filter_keywords:
           - Ave Mujica
@@ -424,7 +432,6 @@ artists:
 | `type` | string | required | Currently only "webpage" supported |
 | `url` | string | required | URL to monitor |
 | `description` | string | optional | Human-readable description |
-| `fetch_detail_pages` | bool | `true` | Follow links to detail pages |
 | `max_detail_pages` | int | `10` | Maximum detail pages to fetch |
 | `filter_keywords` | list | `[]` | Keywords to filter relevant content |
 
@@ -461,23 +468,8 @@ uv run nsyc-fetch --force
 ```json
 [
   {
-    "artist": "MyGO!!!!!",
-    "event_type": "lottery",
-    "title": "MyGO!!!!! 9th LIVE チケット先行抽選",
-    "date": "2026-03-20T00:00:00",
-    "end_date": "2026-04-05T00:00:00",
-    "venue": null,
-    "location": null,
-    "action_required": true,
-    "action_deadline": "2026-04-05T00:00:00",
-    "action_description": "Apply for ticket lottery",
-    "event_url": "https://bang-dream.com/events/mygo-9th",
-    "ticket_url": "https://eplus.jp/mygo-9th/",
-    "source_url": "https://bang-dream.com/events",
-    "extracted_at": "2026-01-15T10:30:00.000000",
-    "raw_text": null
-  },
-  {
+    "event_id": "mygo-9th-live-2026-07-18",
+    "parent_event_id": null,
     "artist": "MyGO!!!!!",
     "event_type": "live",
     "title": "MyGO!!!!! 9th LIVE",
@@ -492,7 +484,28 @@ uv run nsyc-fetch --force
     "ticket_url": null,
     "source_url": "https://bang-dream.com/events",
     "extracted_at": "2026-01-15T10:30:00.000000",
-    "raw_text": null
+    "raw_text": null,
+    "ended": false
+  },
+  {
+    "event_id": "mygo-9th-live-2026-07-18-lottery-cd",
+    "parent_event_id": "mygo-9th-live-2026-07-18",
+    "artist": "MyGO!!!!!",
+    "event_type": "lottery",
+    "title": "MyGO!!!!! 9th LIVE CD先行抽選",
+    "date": "2026-03-20T00:00:00",
+    "end_date": "2026-04-05T00:00:00",
+    "venue": null,
+    "location": null,
+    "action_required": true,
+    "action_deadline": "2026-04-05T23:59:00",
+    "action_description": "Apply using serial code from CD (first-press edition)",
+    "event_url": "https://bang-dream.com/events/mygo-9th",
+    "ticket_url": "https://eplus.jp/mygo-9th/",
+    "source_url": "https://bang-dream.com/events",
+    "extracted_at": "2026-01-15T10:30:00.000000",
+    "raw_text": null,
+    "ended": false
   }
 ]
 ```
@@ -515,9 +528,14 @@ uv run nsyc-fetch --force
 ```json
 {
   "last_run": "2026-01-15T10:30:00.000000",
-  "source_hashes": {
-    "bangdream-events-mygo": "a1b2c3d4e5f6g7h8",
-    "bangdream-news-mygo": "h8g7f6e5d4c3b2a1"
+  "detail_pages": {
+    "https://bang-dream.com/events/mygo-9th": {
+      "url": "https://bang-dream.com/events/mygo-9th",
+      "content_hash": "a1b2c3d4e5f6g7h8",
+      "last_checked": "2026-01-15T10:30:00.000000",
+      "event_date": "2026-07-19T00:00:00",
+      "source_id": "bangdream-events-mygo"
+    }
   },
   "seen_event_ids": []
 }

@@ -13,7 +13,7 @@ from openai import OpenAI
 from .extractor import extract_events_from_section
 from .fetcher import discover_event_urls, fetch_detail_page
 from .logger import close_logger, get_logger, init_logger
-from .models import DetailPageState, Event, FetchState
+from .models import DetailPageState, Event, EventType, FetchState, generate_event_id
 
 
 def load_sources(config_path: str = "sources.yaml") -> dict:
@@ -186,6 +186,52 @@ def get_next_action(
     return min(phases, key=lambda e: e["action_deadline"])
 
 
+def resolve_cross_page_parents(events: list[Event]) -> list[Event]:
+    """Resolve parent references for events extracted from different pages.
+
+    Args:
+        events: All events from a single source (may span multiple pages)
+
+    Returns:
+        Events with parent_event_id resolved where possible
+    """
+    # Build lookup of concerts by title
+    concerts_by_title: dict[str, Event] = {}
+    for event in events:
+        if event.event_type == EventType.LIVE:
+            concerts_by_title[event.title] = event
+
+    # Resolve any events with parent_title but no parent_event_id
+    for event in events:
+        if event.parent_title and not event.parent_event_id:
+            parent = concerts_by_title.get(event.parent_title)
+            if parent:
+                event.parent_event_id = parent.event_id
+
+                # Regenerate event_id using parent's data
+                if event.event_type in (EventType.LOTTERY, EventType.SALE):
+                    requirement = (
+                        event.ticket_requirement.value
+                        if event.ticket_requirement
+                        else "other"
+                    )
+                    priority = (
+                        event.ticket_priority.value
+                        if event.ticket_priority
+                        else "other"
+                    )
+
+                    event.event_id = generate_event_id(
+                        title=parent.title,
+                        date=parent.date,
+                        event_type=event.event_type.value,
+                        ticket_requirement=requirement,
+                        ticket_priority=priority,
+                    )
+
+    return events
+
+
 def get_known_urls_for_source(
     state: FetchState,
     source_id: str,
@@ -330,6 +376,9 @@ async def fetch_artist_events(
                         logger.log_error(source_id, f"Failed to fetch {url}: {e}")
 
                 page_index += 1
+
+            # Resolve cross-page parent references within this source
+            source_events = resolve_cross_page_parents(source_events)
 
             print(f"  Extracted {len(source_events)} events from {source_id}")
             all_events.extend(source_events)

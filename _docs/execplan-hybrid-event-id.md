@@ -25,13 +25,13 @@ To verify success, run `uv run nsyc-fetch --force` and examine `events.json`. Ea
 - [x] Milestone 2: Add generate_event_id() utility function
 - [x] Milestone 3: Update extraction prompt in extractor.py
 - [x] Milestone 4: Add post-extraction processing
-- [ ] Milestone 5: Add cross-page parent resolution in main.py
-- [ ] Milestone 6: Integration testing and validation
+- [x] Milestone 5: Add cross-page parent resolution in main.py
+- [x] Milestone 6: Integration testing and validation
 
 
 ## Surprises & Discoveries
 
-(None yet - to be updated during implementation)
+- One `ticket_priority` warning for "プレイガイド先行" which was classified as `other` - this is expected since playguide lotteries often don't follow the fastest/secondary/tertiary pattern
 
 
 ## Decision Log
@@ -43,7 +43,26 @@ To verify success, run `uv run nsyc-fetch --force` and examine `events.json`. Ea
 
 ## Outcomes & Retrospective
 
-(To be completed after implementation)
+**Completed: 2026-01-03**
+
+**What went well:**
+- All 6 milestones completed successfully
+- Validation passed with no missing event_ids, orphan parent references, or missing ticket fields
+- 17 events extracted with proper parent-child relationships
+- Lottery events correctly reference their parent concerts
+- Ticket requirement details populated with specific product names (e.g., `8th Single「静降想」初回限定盤`)
+
+**Validation results:**
+```
+Total events: 17
+Validation complete
+```
+(No MISSING or ORPHAN messages)
+
+**Sample event_id formats working correctly:**
+- Concert: `mygo-9th-live-2026-07-18`
+- CD最速先行: `mygo-9th-live-2026-07-18-lottery-cd-fastest`
+- プレイガイド先行: `mygoave-mujica-ツーマンライブ-moment-memory-2026-03-01-lottery-playguide-other`
 
 
 ## Context and Orientation
