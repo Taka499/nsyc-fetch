@@ -32,7 +32,7 @@ events.json      → Time-bound events with deadlines
 
 ```bash
 # Clone and enter directory
-git clone <your-repo-url>
+git clone https://github.com/Taka499/nsyc-fetch.git
 cd nsyc-fetch
 
 # Install dependencies
@@ -134,12 +134,12 @@ The system automatically:
 
 ## Files
 
-| File/Directory | Purpose                                         |
-| -------------- | ----------------------------------------------- |
-| `sources.yaml` | Source configuration (what to monitor)          |
-| `state.json`   | Tracks content hashes and known detail pages    |
-| `events.json`  | Extracted events (the output)                   |
-| `logs/`        | Debug logs with LLM requests/responses per run  |
+| File/Directory | Purpose                                        |
+| -------------- | ---------------------------------------------- |
+| `sources.yaml` | Source configuration (what to monitor)         |
+| `state.json`   | Tracks content hashes and known detail pages   |
+| `events.json`  | Extracted events (the output)                  |
+| `logs/`        | Debug logs with LLM requests/responses per run |
 
 ## Extending
 
