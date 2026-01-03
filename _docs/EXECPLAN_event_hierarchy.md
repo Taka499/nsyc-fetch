@@ -22,7 +22,7 @@ To verify the change works: run `uv run nsyc-fetch --force`, then inspect `event
 - [x] (2026-01-03) Milestone 3: Update event parsing in extract_events() and extract_events_from_section()
 - [x] (2026-01-03) Milestone 4: Update save_events() to use event_id for deduplication (removed signature-based matching)
 - [x] (2026-01-03) Milestone 5: Add get_ticket_phases() and get_next_action() query utilities
-- [ ] Milestone 6: End-to-end validation
+- [x] (2026-01-03) Milestone 6: End-to-end validation - all 17 events have event_id, parent-child links work
 
 
 ## Surprises & Discoveries
@@ -43,7 +43,21 @@ To verify the change works: run `uv run nsyc-fetch --force`, then inspect `event
 
 ## Outcomes & Retrospective
 
-(To be completed at the end of implementation)
+**Completed**: 2026-01-03
+
+**Results**:
+- All 17 extracted events have stable `event_id` values
+- Lottery events correctly reference parent concerts via `parent_event_id`
+- Re-running extraction produces no duplicates (event count stable at 17)
+- Query utilities `get_ticket_phases()` and `get_next_action()` available for downstream use
+
+**Example parent-child link**:
+- Concert: `mygo-ave-mujica-live-2026-03-01` (MyGO!!!!!×Ave Mujica ツーマンライブ)
+- Lottery: `parent_event_id: mygo-ave-mujica-live-2026-03-01` (プレイガイド先行)
+
+**Lessons learned**:
+- LLM-generated event_id works well; the model follows the format consistently
+- Decision to discard existing data simplified implementation significantly (no migration needed)
 
 
 ## Context and Orientation
